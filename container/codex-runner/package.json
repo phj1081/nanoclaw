@@ -1,0 +1,16 @@
+{
+  "name": "nanoclaw-codex-runner",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Container-side Codex CLI runner for NanoClaw",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "typescript": "^5.7.3"
+  }
+}
