@@ -79,17 +79,6 @@ function buildVolumeMounts(
       readonly: true,
     });
 
-    // Shadow .env so the agent cannot read secrets from the mounted project root.
-    // Credentials are injected by the credential proxy, never exposed to containers.
-    const envFile = path.join(projectRoot, '.env');
-    if (fs.existsSync(envFile)) {
-      mounts.push({
-        hostPath: '/dev/null',
-        containerPath: '/workspace/project/.env',
-        readonly: true,
-      });
-    }
-
     // Main also gets its group folder as the working directory
     mounts.push({
       hostPath: groupDir,
@@ -198,8 +187,7 @@ function buildVolumeMounts(
   // groups. Recompiled on container startup via entrypoint.sh.
   const agentType = group.agentType || 'claude-code';
   const runnerDirName = agentType === 'codex' ? 'codex-runner' : 'agent-runner';
-  const runnerSrcSuffix =
-    agentType === 'codex' ? 'codex-runner-src' : 'agent-runner-src';
+  const runnerSrcSuffix = agentType === 'codex' ? 'codex-runner-src' : 'agent-runner-src';
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -237,6 +225,7 @@ function buildVolumeMounts(
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  isMain: boolean,
   agentType: 'claude-code' | 'codex' = 'claude-code',
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
@@ -245,10 +234,8 @@ function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
 
   if (agentType === 'codex') {
-    // Codex uses OpenAI API — pass key if available, otherwise rely on
-    // mounted ~/.codex/auth.json for OAuth (ChatGPT login)
-    const openaiKey =
-      process.env.CODEX_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    // Codex uses OpenAI API — pass the key directly (no credential proxy)
+    const openaiKey = process.env.CODEX_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
     if (openaiKey) {
       args.push('-e', `OPENAI_API_KEY=${openaiKey}`);
     }
@@ -260,9 +247,6 @@ function buildContainerArgs(
     );
 
     // Mirror the host's auth method with a placeholder value.
-    // API key mode: SDK sends x-api-key, proxy replaces with real key.
-    // OAuth mode:   SDK exchanges placeholder token for temp API key,
-    //               proxy injects real OAuth token on that exchange request.
     const authMode = detectAuthMode();
     if (authMode === 'api-key') {
       args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
@@ -280,7 +264,14 @@ function buildContainerArgs(
   const hostUid = process.getuid?.();
   const hostGid = process.getgid?.();
   if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    args.push('--user', `${hostUid}:${hostGid}`);
+    if (isMain) {
+      // Main containers start as root so the entrypoint can mount --bind
+      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
+      args.push('-e', `RUN_UID=${hostUid}`);
+      args.push('-e', `RUN_GID=${hostGid}`);
+    } else {
+      args.push('--user', `${hostUid}:${hostGid}`);
+    }
     args.push('-e', 'HOME=/home/node');
   }
 
@@ -313,7 +304,7 @@ export async function runContainerAgent(
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   const agentType = group.agentType || 'claude-code';
-  const containerArgs = buildContainerArgs(mounts, containerName, agentType);
+  const containerArgs = buildContainerArgs(mounts, containerName, input.isMain, agentType);
 
   logger.debug(
     {

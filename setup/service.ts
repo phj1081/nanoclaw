@@ -77,7 +77,7 @@ function setupLaunchd(
     homeDir,
     'Library',
     'LaunchAgents',
-    'com.nanoclaw.plist',
+    'com.nanoclaw-fork.plist',
   );
   fs.mkdirSync(path.dirname(plistPath), { recursive: true });
 
@@ -86,7 +86,7 @@ function setupLaunchd(
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.nanoclaw</string>
+    <string>com.nanoclaw-fork</string>
     <key>ProgramArguments</key>
     <array>
         <string>${nodePath}</string>
@@ -104,6 +104,8 @@ function setupLaunchd(
         <string>/usr/local/bin:/usr/bin:/bin:${homeDir}/.local/bin</string>
         <key>HOME</key>
         <string>${homeDir}</string>
+        <key>CREDENTIAL_PROXY_PORT</key>
+        <string>3002</string>
     </dict>
     <key>StandardOutPath</key>
     <string>${projectRoot}/logs/nanoclaw.log</string>
@@ -128,7 +130,7 @@ function setupLaunchd(
   let serviceLoaded = false;
   try {
     const output = execSync('launchctl list', { encoding: 'utf-8' });
-    serviceLoaded = output.includes('com.nanoclaw');
+    serviceLoaded = output.includes('com.nanoclaw-fork');
   } catch {
     // launchctl list failed
   }
