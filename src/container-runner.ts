@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -165,6 +166,21 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // For Codex groups: mount host ~/.codex/ so OAuth tokens are available
+  if (group.agentType === 'codex') {
+    const hostCodexDir = path.join(
+      process.env.HOME || os.homedir(),
+      '.codex',
+    );
+    if (fs.existsSync(hostCodexDir)) {
+      mounts.push({
+        hostPath: hostCodexDir,
+        containerPath: '/home/node/.codex',
+        readonly: true,
+      });
+    }
+  }
+
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
   const groupIpcDir = resolveGroupIpcPath(group.folder);
@@ -182,7 +198,8 @@ function buildVolumeMounts(
   // groups. Recompiled on container startup via entrypoint.sh.
   const agentType = group.agentType || 'claude-code';
   const runnerDirName = agentType === 'codex' ? 'codex-runner' : 'agent-runner';
-  const runnerSrcSuffix = agentType === 'codex' ? 'codex-runner-src' : 'agent-runner-src';
+  const runnerSrcSuffix =
+    agentType === 'codex' ? 'codex-runner-src' : 'agent-runner-src';
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -228,8 +245,10 @@ function buildContainerArgs(
   args.push('-e', `TZ=${TIMEZONE}`);
 
   if (agentType === 'codex') {
-    // Codex uses OpenAI API — pass the key directly (no credential proxy)
-    const openaiKey = process.env.CODEX_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
+    // Codex uses OpenAI API — pass key if available, otherwise rely on
+    // mounted ~/.codex/auth.json for OAuth (ChatGPT login)
+    const openaiKey =
+      process.env.CODEX_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
     if (openaiKey) {
       args.push('-e', `OPENAI_API_KEY=${openaiKey}`);
     }
