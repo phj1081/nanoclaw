@@ -80,20 +80,34 @@ function prepareGroupEnvironment(
     );
   }
 
-  // Sync skills into each group's .claude/skills/
-  // Sources: 1) user's global ~/.claude/skills/  2) container/skills/ (nanoclaw bundled)
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  const skillSources = [
-    path.join(os.homedir(), '.claude', 'skills'),
-    path.join(projectRoot, 'container', 'skills'),
+  // Sync skills and commands into each group's .claude/ session dir
+  // Sources: 1) user's global ~/.claude/  2) container/skills/ (nanoclaw bundled)
+  const syncDirs = [
+    {
+      dst: path.join(groupSessionsDir, 'skills'),
+      sources: [
+        path.join(os.homedir(), '.claude', 'skills'),
+        path.join(projectRoot, 'container', 'skills'),
+      ],
+    },
+    {
+      dst: path.join(groupSessionsDir, 'commands'),
+      sources: [path.join(os.homedir(), '.claude', 'commands')],
+    },
   ];
-  for (const skillsSrc of skillSources) {
-    if (!fs.existsSync(skillsSrc)) continue;
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
+  for (const { dst, sources } of syncDirs) {
+    for (const src of sources) {
+      if (!fs.existsSync(src)) continue;
+      for (const entry of fs.readdirSync(src)) {
+        const srcPath = path.join(src, entry);
+        const dstPath = path.join(dst, entry);
+        if (fs.statSync(srcPath).isDirectory()) {
+          fs.cpSync(srcPath, dstPath, { recursive: true });
+        } else {
+          fs.mkdirSync(dst, { recursive: true });
+          fs.copyFileSync(srcPath, dstPath);
+        }
+      }
     }
   }
 
