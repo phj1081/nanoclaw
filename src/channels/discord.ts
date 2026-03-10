@@ -1,4 +1,10 @@
-import { Client, Events, GatewayIntentBits, Message, TextChannel } from 'discord.js';
+import {
+  Client,
+  Events,
+  GatewayIntentBits,
+  Message,
+  TextChannel,
+} from 'discord.js';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -27,7 +33,11 @@ export class DiscordChannel implements Channel {
   private typingIntervals = new Map<string, NodeJS.Timeout>();
   private agentTypeFilter?: AgentType;
 
-  constructor(botToken: string, opts: DiscordChannelOpts, agentTypeFilter?: AgentType) {
+  constructor(
+    botToken: string,
+    opts: DiscordChannelOpts,
+    agentTypeFilter?: AgentType,
+  ) {
     this.botToken = botToken;
     this.opts = opts;
     this.agentTypeFilter = agentTypeFilter;
@@ -95,18 +105,20 @@ export class DiscordChannel implements Channel {
 
       // Handle attachments — store placeholders so the agent knows something was sent
       if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map((att) => {
-          const contentType = att.contentType || '';
-          if (contentType.startsWith('image/')) {
-            return `[Image: ${att.name || 'image'}]`;
-          } else if (contentType.startsWith('video/')) {
-            return `[Video: ${att.name || 'video'}]`;
-          } else if (contentType.startsWith('audio/')) {
-            return `[Audio: ${att.name || 'audio'}]`;
-          } else {
-            return `[File: ${att.name || 'file'}]`;
-          }
-        });
+        const attachmentDescriptions = [...message.attachments.values()].map(
+          (att) => {
+            const contentType = att.contentType || '';
+            if (contentType.startsWith('image/')) {
+              return `[Image: ${att.name || 'image'}]`;
+            } else if (contentType.startsWith('video/')) {
+              return `[Video: ${att.name || 'video'}]`;
+            } else if (contentType.startsWith('audio/')) {
+              return `[Audio: ${att.name || 'audio'}]`;
+            } else {
+              return `[File: ${att.name || 'file'}]`;
+            }
+          },
+        );
         if (content) {
           content = `${content}\n${attachmentDescriptions.join('\n')}`;
         } else {
@@ -132,7 +144,13 @@ export class DiscordChannel implements Channel {
 
       // Store chat metadata for discovery
       const isGroup = message.guild !== null;
-      this.opts.onChatMetadata(chatJid, timestamp, chatName, 'discord', isGroup);
+      this.opts.onChatMetadata(
+        chatJid,
+        timestamp,
+        chatName,
+        'discord',
+        isGroup,
+      );
 
       // Only deliver full message for registered groups matching our agent type
       const group = this.opts.registeredGroups()[chatJid];
@@ -143,7 +161,10 @@ export class DiscordChannel implements Channel {
         );
         return;
       }
-      if (this.agentTypeFilter && (group.agentType || 'claude-code') !== this.agentTypeFilter) {
+      if (
+        this.agentTypeFilter &&
+        (group.agentType || 'claude-code') !== this.agentTypeFilter
+      ) {
         return; // This JID belongs to a different agent type's bot
       }
 
@@ -278,14 +299,22 @@ registerChannel('discord', (opts: ChannelOpts) => {
     return null;
   }
   // If a second Codex bot token exists, this instance only handles claude-code groups
-  const hasCodexBot = !!(process.env.DISCORD_CODEX_BOT_TOKEN || envVars.DISCORD_CODEX_BOT_TOKEN);
-  return new DiscordChannel(token, opts, hasCodexBot ? 'claude-code' : undefined);
+  const hasCodexBot = !!(
+    process.env.DISCORD_CODEX_BOT_TOKEN || envVars.DISCORD_CODEX_BOT_TOKEN
+  );
+  return new DiscordChannel(
+    token,
+    opts,
+    hasCodexBot ? 'claude-code' : undefined,
+  );
 });
 
 registerChannel('discord-codex', (opts: ChannelOpts) => {
   const envVars = readEnvFile(['DISCORD_CODEX_BOT_TOKEN']);
   const token =
-    process.env.DISCORD_CODEX_BOT_TOKEN || envVars.DISCORD_CODEX_BOT_TOKEN || '';
+    process.env.DISCORD_CODEX_BOT_TOKEN ||
+    envVars.DISCORD_CODEX_BOT_TOKEN ||
+    '';
   if (!token) return null; // Codex Discord bot is optional
   return new DiscordChannel(token, opts, 'codex');
 });

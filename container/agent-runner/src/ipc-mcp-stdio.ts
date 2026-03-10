@@ -194,7 +194,7 @@ server.tool(
   'pause_task',
   'Pause a scheduled task. It will not run until resumed.',
   { task_id: z.string().describe('The task ID to pause') },
-  async (args) => {
+  async (args: { task_id: string }) => {
     const data = {
       type: 'pause_task',
       taskId: args.task_id,
@@ -213,7 +213,7 @@ server.tool(
   'resume_task',
   'Resume a paused task.',
   { task_id: z.string().describe('The task ID to resume') },
-  async (args) => {
+  async (args: { task_id: string }) => {
     const data = {
       type: 'resume_task',
       taskId: args.task_id,
@@ -232,7 +232,7 @@ server.tool(
   'cancel_task',
   'Cancel and delete a scheduled task.',
   { task_id: z.string().describe('The task ID to cancel') },
-  async (args) => {
+  async (args: { task_id: string }) => {
     const data = {
       type: 'cancel_task',
       taskId: args.task_id,
@@ -256,7 +256,7 @@ server.tool(
     schedule_type: z.enum(['cron', 'interval', 'once']).optional().describe('New schedule type'),
     schedule_value: z.string().optional().describe('New schedule value (see schedule_task for format)'),
   },
-  async (args) => {
+  async (args: { task_id: string; prompt?: string; schedule_type?: 'cron' | 'interval' | 'once'; schedule_value?: string }) => {
     // Validate schedule_value if provided
     if (args.schedule_type === 'cron' || (!args.schedule_type && args.schedule_value)) {
       if (args.schedule_value) {
@@ -308,7 +308,7 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     folder: z.string().describe('Channel-prefixed folder name (e.g., "whatsapp_family-chat", "telegram_dev-team")'),
     trigger: z.string().describe('Trigger word (e.g., "@Andy")'),
   },
-  async (args) => {
+  async (args: { jid: string; name: string; folder: string; trigger: string }) => {
     if (!isMain) {
       return {
         content: [{ type: 'text' as const, text: 'Only the main group can register new groups.' }],

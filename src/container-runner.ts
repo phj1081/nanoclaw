@@ -1,35 +1,26 @@
 /**
- * Container Runner for NanoClaw
- * Spawns agent execution in containers and handles IPC
+ * Agent Process Runner for NanoClaw
+ * Spawns agent execution as direct host processes and handles IPC
  */
-import { ChildProcess, exec, spawn } from 'child_process';
+import { ChildProcess, spawn } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 import {
-  CODEX_CONTAINER_IMAGE,
-  CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
-  CREDENTIAL_PROXY_PORT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
-import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
-import { logger } from './logger.js';
 import {
-  CONTAINER_HOST_GATEWAY,
-  CONTAINER_RUNTIME_BIN,
-  hostGatewayArgs,
-  readonlyMountArgs,
-  stopContainer,
-} from './container-runtime.js';
-import { detectAuthMode } from './credential-proxy.js';
+  resolveGroupFolderPath,
+  resolveGroupIpcPath,
+} from './group-folder.js';
+import { logger } from './logger.js';
 import { readEnvFile } from './env.js';
-import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
 // Sentinel markers for robust output parsing (must match agent-runner)
@@ -54,60 +45,19 @@ export interface ContainerOutput {
   error?: string;
 }
 
-interface VolumeMount {
-  hostPath: string;
-  containerPath: string;
-  readonly: boolean;
-}
-
-function buildVolumeMounts(
+/**
+ * Prepare the group's environment: directories, sessions, env vars.
+ * Returns the environment variables and paths for the runner process.
+ */
+function prepareGroupEnvironment(
   group: RegisteredGroup,
   isMain: boolean,
-): VolumeMount[] {
-  const mounts: VolumeMount[] = [];
+): { env: Record<string, string>; groupDir: string; runnerDir: string } {
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
+  fs.mkdirSync(groupDir, { recursive: true });
 
-  if (isMain) {
-    // Main gets the project root read-only. Writable paths the agent needs
-    // (group folder, IPC, .claude/) are mounted separately below.
-    // Read-only prevents the agent from modifying host application code
-    // (src/, dist/, package.json, etc.) which would bypass the sandbox
-    // entirely on next restart.
-    mounts.push({
-      hostPath: projectRoot,
-      containerPath: '/workspace/project',
-      readonly: true,
-    });
-
-    // Main also gets its group folder as the working directory
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-  } else {
-    // Other groups only get their own folder
-    mounts.push({
-      hostPath: groupDir,
-      containerPath: '/workspace/group',
-      readonly: false,
-    });
-
-    // Global memory directory (read-only for non-main)
-    // Only directory mounts are supported, not file mounts
-    const globalDir = path.join(GROUPS_DIR, 'global');
-    if (fs.existsSync(globalDir)) {
-      mounts.push({
-        hostPath: globalDir,
-        containerPath: '/workspace/global',
-        readonly: true,
-      });
-    }
-  }
-
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
+  // Per-group Claude sessions directory
   const groupSessionsDir = path.join(
     DATA_DIR,
     'sessions',
@@ -122,14 +72,8 @@ function buildVolumeMounts(
       JSON.stringify(
         {
           env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
             CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
             CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
             CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
           },
         },
@@ -140,7 +84,7 @@ function buildVolumeMounts(
   }
 
   // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+  const skillsSrc = path.join(projectRoot, 'container', 'skills');
   const skillsDst = path.join(groupSessionsDir, 'skills');
   if (fs.existsSync(skillsSrc)) {
     for (const skillDir of fs.readdirSync(skillsSrc)) {
@@ -150,15 +94,72 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
-  mounts.push({
-    hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
-    readonly: false,
-  });
 
-  // For Codex groups: create a per-session writable .codex/ directory
-  if (group.agentType === 'codex') {
-    const hostCodexDir = path.join(process.env.HOME || os.homedir(), '.codex');
+  // Per-group IPC namespace
+  const groupIpcDir = resolveGroupIpcPath(group.folder);
+  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
+  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
+
+  // Global memory directory (for non-main groups)
+  const globalDir = path.join(GROUPS_DIR, 'global');
+
+  // Additional mount directories (validated)
+  const extraDirs: string[] = [];
+  if (group.containerConfig?.additionalMounts) {
+    for (const mount of group.containerConfig.additionalMounts) {
+      if (fs.existsSync(mount.hostPath)) {
+        extraDirs.push(mount.hostPath);
+      }
+    }
+  }
+
+  // Determine runner directory
+  const agentType = group.agentType || 'claude-code';
+  const runnerDirName =
+    agentType === 'codex' ? 'codex-runner' : 'agent-runner';
+  const runnerDir = path.join(projectRoot, 'container', runnerDirName);
+
+  // Build environment variables for the runner process
+  const envVars = readEnvFile([
+    'ANTHROPIC_API_KEY',
+    'CLAUDE_CODE_OAUTH_TOKEN',
+    'CLAUDE_MODEL',
+    'CLAUDE_THINKING',
+    'CLAUDE_THINKING_BUDGET',
+    'CLAUDE_EFFORT',
+    'OPENAI_API_KEY',
+    'CODEX_OPENAI_API_KEY',
+  ]);
+
+  const env: Record<string, string> = {
+    ...process.env as Record<string, string>,
+    TZ: TIMEZONE,
+    HOME: os.homedir(),
+    // Path configuration for the runner
+    NANOCLAW_GROUP_DIR: groupDir,
+    NANOCLAW_IPC_DIR: groupIpcDir,
+    NANOCLAW_GLOBAL_DIR: globalDir,
+    NANOCLAW_EXTRA_DIR: extraDirs.length > 0 ? extraDirs[0] : '',
+    // MCP server context
+    NANOCLAW_CHAT_JID: group.folder,
+    NANOCLAW_GROUP_FOLDER: group.folder,
+    NANOCLAW_IS_MAIN: isMain ? '1' : '0',
+    // Claude sessions directory — set CLAUDE_CONFIG_DIR so SDK uses per-group sessions
+    CLAUDE_CONFIG_DIR: groupSessionsDir,
+  };
+
+  // Pass credentials directly (no proxy needed on host)
+  if (agentType === 'codex') {
+    const openaiKey =
+      envVars.CODEX_OPENAI_API_KEY ||
+      process.env.CODEX_OPENAI_API_KEY ||
+      envVars.OPENAI_API_KEY ||
+      process.env.OPENAI_API_KEY;
+    if (openaiKey) env.OPENAI_API_KEY = openaiKey;
+
+    // Codex session directory
+    const hostCodexDir = path.join(os.homedir(), '.codex');
     const sessionCodexDir = path.join(
       DATA_DIR,
       'sessions',
@@ -166,15 +167,9 @@ function buildVolumeMounts(
       '.codex',
     );
     fs.mkdirSync(sessionCodexDir, { recursive: true });
-
-    // Always refresh auth credentials from host
     const authSrc = path.join(hostCodexDir, 'auth.json');
     const authDst = path.join(sessionCodexDir, 'auth.json');
-    if (fs.existsSync(authSrc)) {
-      fs.copyFileSync(authSrc, authDst);
-    }
-
-    // Only copy config files if they don't exist yet (preserves per-session customization)
+    if (fs.existsSync(authSrc)) fs.copyFileSync(authSrc, authDst);
     for (const file of ['config.toml', 'config.json']) {
       const src = path.join(hostCodexDir, file);
       const dst = path.join(sessionCodexDir, file);
@@ -182,148 +177,37 @@ function buildVolumeMounts(
         fs.copyFileSync(src, dst);
       }
     }
-
-    mounts.push({
-      hostPath: sessionCodexDir,
-      containerPath: '/home/node/.codex',
-      readonly: false,
-    });
-  }
-
-  // Per-group IPC namespace: each group gets its own IPC directory
-  // This prevents cross-group privilege escalation via IPC
-  const groupIpcDir = resolveGroupIpcPath(group.folder);
-  fs.mkdirSync(path.join(groupIpcDir, 'messages'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'tasks'), { recursive: true });
-  fs.mkdirSync(path.join(groupIpcDir, 'input'), { recursive: true });
-  mounts.push({
-    hostPath: groupIpcDir,
-    containerPath: '/workspace/ipc',
-    readonly: false,
-  });
-
-  // Copy runner source into a per-group writable location so agents
-  // can customize it (add tools, change behavior) without affecting other
-  // groups. Recompiled on container startup via entrypoint.sh.
-  const agentType = group.agentType || 'claude-code';
-  const runnerDirName = agentType === 'codex' ? 'codex-runner' : 'agent-runner';
-  const runnerSrcSuffix =
-    agentType === 'codex' ? 'codex-runner-src' : 'agent-runner-src';
-  const agentRunnerSrc = path.join(
-    projectRoot,
-    'container',
-    runnerDirName,
-    'src',
-  );
-  const groupAgentRunnerDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    runnerSrcSuffix,
-  );
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
-    fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
-  }
-  mounts.push({
-    hostPath: groupAgentRunnerDir,
-    containerPath: '/app/src',
-    readonly: false,
-  });
-
-  // Additional mounts validated against external allowlist (tamper-proof from containers)
-  if (group.containerConfig?.additionalMounts) {
-    const validatedMounts = validateAdditionalMounts(
-      group.containerConfig.additionalMounts,
-      group.name,
-      isMain,
-    );
-    mounts.push(...validatedMounts);
-  }
-
-  return mounts;
-}
-
-function buildContainerArgs(
-  mounts: VolumeMount[],
-  containerName: string,
-  isMain: boolean,
-  agentType: 'claude-code' | 'codex' = 'claude-code',
-): string[] {
-  const args: string[] = ['run', '-i', '--rm', '--name', containerName];
-
-  // Pass host timezone so container's local time matches the user's
-  args.push('-e', `TZ=${TIMEZONE}`);
-
-  if (agentType === 'codex') {
-    // Codex uses OpenAI API — pass the key directly (no credential proxy)
-    const openaiKey =
-      process.env.CODEX_OPENAI_API_KEY || process.env.OPENAI_API_KEY;
-    if (openaiKey) {
-      args.push('-e', `OPENAI_API_KEY=${openaiKey}`);
-    }
+    env.CODEX_CONFIG_DIR = sessionCodexDir;
   } else {
-    // Route API traffic through the credential proxy (containers never see real secrets)
-    args.push(
-      '-e',
-      `ANTHROPIC_BASE_URL=http://${CONTAINER_HOST_GATEWAY}:${CREDENTIAL_PROXY_PORT}`,
-    );
-
-    // Mirror the host's auth method with a placeholder value.
-    const authMode = detectAuthMode();
-    if (authMode === 'api-key') {
-      args.push('-e', 'ANTHROPIC_API_KEY=placeholder');
-    } else {
-      args.push('-e', 'CLAUDE_CODE_OAUTH_TOKEN=placeholder');
+    // Claude Code — pass real credentials directly
+    if (envVars.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY) {
+      env.ANTHROPIC_API_KEY =
+        envVars.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY || '';
+    }
+    if (
+      envVars.CLAUDE_CODE_OAUTH_TOKEN ||
+      process.env.CLAUDE_CODE_OAUTH_TOKEN
+    ) {
+      env.CLAUDE_CODE_OAUTH_TOKEN =
+        envVars.CLAUDE_CODE_OAUTH_TOKEN ||
+        process.env.CLAUDE_CODE_OAUTH_TOKEN ||
+        '';
+    }
+    // Model/thinking config
+    for (const key of [
+      'CLAUDE_MODEL',
+      'CLAUDE_THINKING',
+      'CLAUDE_THINKING_BUDGET',
+      'CLAUDE_EFFORT',
+    ]) {
+      const val =
+        envVars[key as keyof typeof envVars] ||
+        process.env[key];
+      if (val) env[key] = val;
     }
   }
 
-  // Runtime-specific args for host gateway resolution
-  args.push(...hostGatewayArgs());
-
-  // Pass model and thinking configuration to container agent (read from .env file)
-  const modelEnv = readEnvFile(['CLAUDE_MODEL', 'CLAUDE_THINKING', 'CLAUDE_THINKING_BUDGET', 'CLAUDE_EFFORT']);
-  if (modelEnv.CLAUDE_MODEL) {
-    args.push('-e', `CLAUDE_MODEL=${modelEnv.CLAUDE_MODEL}`);
-  }
-  if (modelEnv.CLAUDE_THINKING) {
-    args.push('-e', `CLAUDE_THINKING=${modelEnv.CLAUDE_THINKING}`);
-  }
-  if (modelEnv.CLAUDE_THINKING_BUDGET) {
-    args.push('-e', `CLAUDE_THINKING_BUDGET=${modelEnv.CLAUDE_THINKING_BUDGET}`);
-  }
-  if (modelEnv.CLAUDE_EFFORT) {
-    args.push('-e', `CLAUDE_EFFORT=${modelEnv.CLAUDE_EFFORT}`);
-  }
-
-  // Run as host user so bind-mounted files are accessible.
-  // Skip when running as root (uid 0), as the container's node user (uid 1000),
-  // or when getuid is unavailable (native Windows without WSL).
-  const hostUid = process.getuid?.();
-  const hostGid = process.getgid?.();
-  if (hostUid != null && hostUid !== 0 && hostUid !== 1000) {
-    if (isMain) {
-      // Main containers start as root so the entrypoint can mount --bind
-      // to shadow .env. Privileges are dropped via setpriv in entrypoint.sh.
-      args.push('-e', `RUN_UID=${hostUid}`);
-      args.push('-e', `RUN_GID=${hostGid}`);
-    } else {
-      args.push('--user', `${hostUid}:${hostGid}`);
-    }
-    args.push('-e', 'HOME=/home/node');
-  }
-
-  for (const mount of mounts) {
-    if (mount.readonly) {
-      args.push(...readonlyMountArgs(mount.hostPath, mount.containerPath));
-    } else {
-      args.push('-v', `${mount.hostPath}:${mount.containerPath}`);
-    }
-  }
-
-  // Select container image based on agent type
-  args.push(agentType === 'codex' ? CODEX_CONTAINER_IMAGE : CONTAINER_IMAGE);
-
-  return args;
+  return { env, groupDir, runnerDir };
 }
 
 export async function runContainerAgent(
@@ -333,71 +217,66 @@ export async function runContainerAgent(
   onOutput?: (output: ContainerOutput) => Promise<void>,
 ): Promise<ContainerOutput> {
   const startTime = Date.now();
-
-  const groupDir = resolveGroupFolderPath(group.folder);
-  fs.mkdirSync(groupDir, { recursive: true });
-
-  const mounts = buildVolumeMounts(group, input.isMain);
-  const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
-  const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const agentType = group.agentType || 'claude-code';
-  const containerArgs = buildContainerArgs(
-    mounts,
-    containerName,
+  const { env, groupDir, runnerDir } = prepareGroupEnvironment(
+    group,
     input.isMain,
-    agentType,
   );
 
-  logger.debug(
-    {
-      group: group.name,
-      containerName,
-      mounts: mounts.map(
-        (m) =>
-          `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
-      ),
-      containerArgs: containerArgs.join(' '),
-    },
-    'Container mount configuration',
-  );
+  const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
+  const processName = `nanoclaw-${safeName}-${Date.now()}`;
+
+  // Check if runner is built
+  const distEntry = path.join(runnerDir, 'dist', 'index.js');
+  if (!fs.existsSync(distEntry)) {
+    logger.error(
+      { runnerDir },
+      'Runner not built. Run: cd container/agent-runner && npm install && npm run build',
+    );
+    return {
+      status: 'error',
+      result: null,
+      error: `Runner not built at ${distEntry}. Run npm run build:runners first.`,
+    };
+  }
 
   logger.info(
     {
       group: group.name,
-      containerName,
-      mountCount: mounts.length,
+      processName,
+      agentType: group.agentType || 'claude-code',
       isMain: input.isMain,
     },
-    'Spawning container agent',
+    'Spawning agent process',
   );
 
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
   return new Promise((resolve) => {
-    const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
+    const proc = spawn('node', [distEntry], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      cwd: runnerDir,
+      env,
     });
 
-    onProcess(container, containerName);
+    onProcess(proc, processName);
 
     let stdout = '';
     let stderr = '';
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
-    container.stdin.write(JSON.stringify(input));
-    container.stdin.end();
+    proc.stdin.write(JSON.stringify(input));
+    proc.stdin.end();
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
     let newSessionId: string | undefined;
     let outputChain = Promise.resolve();
 
-    container.stdout.on('data', (data) => {
+    proc.stdout.on('data', (data) => {
       const chunk = data.toString();
 
-      // Always accumulate for logging
       if (!stdoutTruncated) {
         const remaining = CONTAINER_MAX_OUTPUT_SIZE - stdout.length;
         if (chunk.length > remaining) {
@@ -405,20 +284,21 @@ export async function runContainerAgent(
           stdoutTruncated = true;
           logger.warn(
             { group: group.name, size: stdout.length },
-            'Container stdout truncated due to size limit',
+            'Agent stdout truncated due to size limit',
           );
         } else {
           stdout += chunk;
         }
       }
 
-      // Stream-parse for output markers
       if (onOutput) {
         parseBuffer += chunk;
         let startIdx: number;
-        while ((startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1) {
+        while (
+          (startIdx = parseBuffer.indexOf(OUTPUT_START_MARKER)) !== -1
+        ) {
           const endIdx = parseBuffer.indexOf(OUTPUT_END_MARKER, startIdx);
-          if (endIdx === -1) break; // Incomplete pair, wait for more data
+          if (endIdx === -1) break;
 
           const jsonStr = parseBuffer
             .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
@@ -431,10 +311,7 @@ export async function runContainerAgent(
               newSessionId = parsed.newSessionId;
             }
             hadStreamingOutput = true;
-            // Activity detected — reset the hard timeout
             resetTimeout();
-            // Call onOutput for all markers (including null results)
-            // so idle timers start even for "silent" query completions.
             outputChain = outputChain.then(() => onOutput(parsed));
           } catch (err) {
             logger.warn(
@@ -446,23 +323,17 @@ export async function runContainerAgent(
       }
     });
 
-    container.stderr.on('data', (data) => {
+    proc.stderr.on('data', (data) => {
       const chunk = data.toString();
       const lines = chunk.trim().split('\n');
       for (const line of lines) {
-        if (line) logger.debug({ container: group.folder }, line);
+        if (line) logger.debug({ agent: group.folder }, line);
       }
-      // Don't reset timeout on stderr — SDK writes debug logs continuously.
-      // Timeout only resets on actual output (OUTPUT_MARKER in stdout).
       if (stderrTruncated) return;
       const remaining = CONTAINER_MAX_OUTPUT_SIZE - stderr.length;
       if (chunk.length > remaining) {
         stderr += chunk.slice(0, remaining);
         stderrTruncated = true;
-        logger.warn(
-          { group: group.name, size: stderr.length },
-          'Container stderr truncated due to size limit',
-        );
       } else {
         stderr += chunk;
       }
@@ -471,240 +342,170 @@ export async function runContainerAgent(
     let timedOut = false;
     let hadStreamingOutput = false;
     const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
-    // Grace period: hard timeout must be at least IDLE_TIMEOUT + 30s so the
-    // graceful _close sentinel has time to trigger before the hard kill fires.
     const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
     const killOnTimeout = () => {
       timedOut = true;
       logger.error(
-        { group: group.name, containerName },
-        'Container timeout, stopping gracefully',
+        { group: group.name, processName },
+        'Agent timeout, sending SIGTERM',
       );
-      exec(stopContainer(containerName), { timeout: 15000 }, (err) => {
-        if (err) {
-          logger.warn(
-            { group: group.name, containerName, err },
-            'Graceful stop failed, force killing',
-          );
-          container.kill('SIGKILL');
-        }
-      });
+      proc.kill('SIGTERM');
+      // Force kill after 15s if still alive
+      setTimeout(() => {
+        if (!proc.killed) proc.kill('SIGKILL');
+      }, 15000);
     };
 
     let timeout = setTimeout(killOnTimeout, timeoutMs);
 
-    // Reset the timeout whenever there's activity (streaming output)
     const resetTimeout = () => {
       clearTimeout(timeout);
       timeout = setTimeout(killOnTimeout, timeoutMs);
     };
 
-    container.on('close', (code) => {
+    proc.on('close', (code) => {
       clearTimeout(timeout);
       const duration = Date.now() - startTime;
 
       if (timedOut) {
         const ts = new Date().toISOString().replace(/[:.]/g, '-');
-        const timeoutLog = path.join(logsDir, `container-${ts}.log`);
         fs.writeFileSync(
-          timeoutLog,
+          path.join(logsDir, `agent-${ts}.log`),
           [
-            `=== Container Run Log (TIMEOUT) ===`,
+            `=== Agent Run Log (TIMEOUT) ===`,
             `Timestamp: ${new Date().toISOString()}`,
             `Group: ${group.name}`,
-            `Container: ${containerName}`,
+            `Process: ${processName}`,
             `Duration: ${duration}ms`,
             `Exit Code: ${code}`,
             `Had Streaming Output: ${hadStreamingOutput}`,
           ].join('\n'),
         );
 
-        // Timeout after output = idle cleanup, not failure.
-        // The agent already sent its response; this is just the
-        // container being reaped after the idle period expired.
         if (hadStreamingOutput) {
           logger.info(
-            { group: group.name, containerName, duration, code },
-            'Container timed out after output (idle cleanup)',
+            { group: group.name, processName, duration, code },
+            'Agent timed out after output (idle cleanup)',
           );
           outputChain.then(() => {
-            resolve({
-              status: 'success',
-              result: null,
-              newSessionId,
-            });
+            resolve({ status: 'success', result: null, newSessionId });
           });
           return;
         }
 
-        logger.error(
-          { group: group.name, containerName, duration, code },
-          'Container timed out with no output',
-        );
-
         resolve({
           status: 'error',
           result: null,
-          error: `Container timed out after ${configTimeout}ms`,
+          error: `Agent timed out after ${configTimeout}ms`,
         });
         return;
       }
 
       const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const logFile = path.join(logsDir, `container-${timestamp}.log`);
+      const logFile = path.join(logsDir, `agent-${timestamp}.log`);
       const isVerbose =
-        process.env.LOG_LEVEL === 'debug' || process.env.LOG_LEVEL === 'trace';
+        process.env.LOG_LEVEL === 'debug' ||
+        process.env.LOG_LEVEL === 'trace';
 
       const logLines = [
-        `=== Container Run Log ===`,
+        `=== Agent Run Log ===`,
         `Timestamp: ${new Date().toISOString()}`,
         `Group: ${group.name}`,
         `IsMain: ${input.isMain}`,
+        `AgentType: ${group.agentType || 'claude-code'}`,
         `Duration: ${duration}ms`,
         `Exit Code: ${code}`,
-        `Stdout Truncated: ${stdoutTruncated}`,
-        `Stderr Truncated: ${stderrTruncated}`,
         ``,
       ];
 
       const isError = code !== 0;
-
       if (isVerbose || isError) {
         logLines.push(
           `=== Input ===`,
           JSON.stringify(input, null, 2),
           ``,
-          `=== Container Args ===`,
-          containerArgs.join(' '),
-          ``,
-          `=== Mounts ===`,
-          mounts
-            .map(
-              (m) =>
-                `${m.hostPath} -> ${m.containerPath}${m.readonly ? ' (ro)' : ''}`,
-            )
-            .join('\n'),
-          ``,
-          `=== Stderr${stderrTruncated ? ' (TRUNCATED)' : ''} ===`,
+          `=== Stderr ===`,
           stderr,
           ``,
-          `=== Stdout${stdoutTruncated ? ' (TRUNCATED)' : ''} ===`,
+          `=== Stdout ===`,
           stdout,
         );
       } else {
         logLines.push(
-          `=== Input Summary ===`,
           `Prompt length: ${input.prompt.length} chars`,
           `Session ID: ${input.sessionId || 'new'}`,
-          ``,
-          `=== Mounts ===`,
-          mounts
-            .map((m) => `${m.containerPath}${m.readonly ? ' (ro)' : ''}`)
-            .join('\n'),
-          ``,
         );
       }
 
       fs.writeFileSync(logFile, logLines.join('\n'));
-      logger.debug({ logFile, verbose: isVerbose }, 'Container log written');
 
       if (code !== 0) {
         logger.error(
-          {
-            group: group.name,
-            code,
-            duration,
-            stderr,
-            stdout,
-            logFile,
-          },
-          'Container exited with error',
+          { group: group.name, code, duration, logFile },
+          'Agent exited with error',
         );
-
         resolve({
           status: 'error',
           result: null,
-          error: `Container exited with code ${code}: ${stderr.slice(-200)}`,
+          error: `Agent exited with code ${code}: ${stderr.slice(-200)}`,
         });
         return;
       }
 
-      // Streaming mode: wait for output chain to settle, return completion marker
       if (onOutput) {
         outputChain.then(() => {
           logger.info(
             { group: group.name, duration, newSessionId },
-            'Container completed (streaming mode)',
+            'Agent completed (streaming mode)',
           );
-          resolve({
-            status: 'success',
-            result: null,
-            newSessionId,
-          });
+          resolve({ status: 'success', result: null, newSessionId });
         });
         return;
       }
 
-      // Legacy mode: parse the last output marker pair from accumulated stdout
+      // Legacy mode: parse output from stdout
       try {
-        // Extract JSON between sentinel markers for robust parsing
         const startIdx = stdout.indexOf(OUTPUT_START_MARKER);
         const endIdx = stdout.indexOf(OUTPUT_END_MARKER);
-
         let jsonLine: string;
         if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
           jsonLine = stdout
             .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
             .trim();
         } else {
-          // Fallback: last non-empty line (backwards compatibility)
           const lines = stdout.trim().split('\n');
           jsonLine = lines[lines.length - 1];
         }
-
         const output: ContainerOutput = JSON.parse(jsonLine);
-
         logger.info(
-          {
-            group: group.name,
-            duration,
-            status: output.status,
-            hasResult: !!output.result,
-          },
-          'Container completed',
+          { group: group.name, duration, status: output.status },
+          'Agent completed',
         );
-
         resolve(output);
       } catch (err) {
         logger.error(
-          {
-            group: group.name,
-            stdout,
-            stderr,
-            error: err,
-          },
-          'Failed to parse container output',
+          { group: group.name, error: err },
+          'Failed to parse agent output',
         );
-
         resolve({
           status: 'error',
           result: null,
-          error: `Failed to parse container output: ${err instanceof Error ? err.message : String(err)}`,
+          error: `Failed to parse agent output: ${err instanceof Error ? err.message : String(err)}`,
         });
       }
     });
 
-    container.on('error', (err) => {
+    proc.on('error', (err) => {
       clearTimeout(timeout);
       logger.error(
-        { group: group.name, containerName, error: err },
-        'Container spawn error',
+        { group: group.name, processName, error: err },
+        'Agent spawn error',
       );
       resolve({
         status: 'error',
         result: null,
-        error: `Container spawn error: ${err.message}`,
+        error: `Agent spawn error: ${err.message}`,
       });
     });
   });
@@ -723,15 +524,11 @@ export function writeTasksSnapshot(
     next_run: string | null;
   }>,
 ): void {
-  // Write filtered tasks to the group's IPC directory
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });
-
-  // Main sees all tasks, others only see their own
   const filteredTasks = isMain
     ? tasks
     : tasks.filter((t) => t.groupFolder === groupFolder);
-
   const tasksFile = path.join(groupIpcDir, 'current_tasks.json');
   fs.writeFileSync(tasksFile, JSON.stringify(filteredTasks, null, 2));
 }
@@ -743,11 +540,6 @@ export interface AvailableGroup {
   isRegistered: boolean;
 }
 
-/**
- * Write available groups snapshot for the container to read.
- * Only main group can see all available groups (for activation).
- * Non-main groups only see their own registration status.
- */
 export function writeGroupsSnapshot(
   groupFolder: string,
   isMain: boolean,
@@ -756,18 +548,12 @@ export function writeGroupsSnapshot(
 ): void {
   const groupIpcDir = resolveGroupIpcPath(groupFolder);
   fs.mkdirSync(groupIpcDir, { recursive: true });
-
-  // Main sees all groups; others see nothing (they can't activate groups)
   const visibleGroups = isMain ? groups : [];
-
   const groupsFile = path.join(groupIpcDir, 'available_groups.json');
   fs.writeFileSync(
     groupsFile,
     JSON.stringify(
-      {
-        groups: visibleGroups,
-        lastSync: new Date().toISOString(),
-      },
+      { groups: visibleGroups, lastSync: new Date().toISOString() },
       null,
       2,
     ),

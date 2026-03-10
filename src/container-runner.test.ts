@@ -35,20 +35,25 @@ vi.mock('fs', async () => {
     ...actual,
     default: {
       ...actual,
-      existsSync: vi.fn(() => false),
+      existsSync: vi.fn((p: string) => {
+        // Return true for runner dist entry so tests proceed past the build check
+        if (typeof p === 'string' && p.includes('dist/index.js')) return true;
+        return false;
+      }),
       mkdirSync: vi.fn(),
       writeFileSync: vi.fn(),
       readFileSync: vi.fn(() => ''),
       readdirSync: vi.fn(() => []),
       statSync: vi.fn(() => ({ isDirectory: () => false })),
       copyFileSync: vi.fn(),
+      cpSync: vi.fn(),
     },
   };
 });
 
-// Mock mount-security
-vi.mock('./mount-security.js', () => ({
-  validateAdditionalMounts: vi.fn(() => []),
+// Mock env
+vi.mock('./env.js', () => ({
+  readEnvFile: vi.fn(() => ({})),
 }));
 
 // Create a controllable fake ChildProcess

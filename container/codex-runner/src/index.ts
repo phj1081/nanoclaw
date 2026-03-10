@@ -33,7 +33,10 @@ interface ContainerOutput {
   error?: string;
 }
 
-const IPC_INPUT_DIR = '/workspace/ipc/input';
+// Paths configurable via env vars (defaults to container paths for backwards compat)
+const GROUP_DIR = process.env.NANOCLAW_GROUP_DIR || '/workspace/group';
+const IPC_DIR = process.env.NANOCLAW_IPC_DIR || '/workspace/ipc';
+const IPC_INPUT_DIR = path.join(IPC_DIR, 'input');
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 const MAX_TURNS = 100;
@@ -140,7 +143,7 @@ async function runCodexExec(prompt: string, resume: boolean): Promise<{ result: 
       args.push(
         'exec',
         '--dangerously-bypass-approvals-and-sandbox',
-        '-C', '/workspace/group',
+        '-C', GROUP_DIR,
         '--skip-git-repo-check',
         '--color', 'never',
         prompt,
@@ -151,7 +154,7 @@ async function runCodexExec(prompt: string, resume: boolean): Promise<{ result: 
 
     const codex: ChildProcess = spawn('codex', args, {
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: '/workspace/group',
+      cwd: GROUP_DIR,
       env: { ...process.env },
     });
 
