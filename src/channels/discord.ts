@@ -1,4 +1,5 @@
 import {
+  Attachment,
   Client,
   Events,
   GatewayIntentBits,
@@ -9,6 +10,48 @@ import {
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+
+/**
+ * Transcribe an audio attachment via OpenAI Whisper API.
+ * Returns the transcribed text, or a fallback placeholder on failure.
+ */
+async function transcribeAudio(
+  att: Attachment,
+  apiKey: string,
+): Promise<string> {
+  try {
+    const res = await fetch(att.url);
+    if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+    const buffer = Buffer.from(await res.arrayBuffer());
+
+    const form = new FormData();
+    const filename = att.name || 'audio.ogg';
+    form.append('file', new Blob([buffer]), filename);
+    form.append('model', 'whisper-1');
+
+    const whisperRes = await fetch(
+      'https://api.openai.com/v1/audio/transcriptions',
+      {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+      },
+    );
+    if (!whisperRes.ok) {
+      const errText = await whisperRes.text();
+      throw new Error(`Whisper API ${whisperRes.status}: ${errText}`);
+    }
+    const data = (await whisperRes.json()) as { text: string };
+    logger.info(
+      { file: filename, length: data.text.length },
+      'Audio transcribed',
+    );
+    return `[Voice message transcription]: ${data.text}`;
+  } catch (err) {
+    logger.error({ err, file: att.name }, 'Audio transcription failed');
+    return `[Audio: ${att.name || 'audio'} (transcription failed)]`;
+  }
+}
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   AgentType,
@@ -103,12 +146,18 @@ export class DiscordChannel implements Channel {
         }
       }
 
-      // Handle attachments — store placeholders so the agent knows something was sent
+      // Handle attachments — transcribe audio, placeholder for others
       if (message.attachments.size > 0) {
-        const attachmentDescriptions = [...message.attachments.values()].map(
-          (att) => {
+        const openaiKey =
+          process.env.OPENAI_API_KEY ||
+          readEnvFile(['OPENAI_API_KEY']).OPENAI_API_KEY ||
+          '';
+        const attachmentDescriptions = await Promise.all(
+          [...message.attachments.values()].map(async (att) => {
             const contentType = att.contentType || '';
-            if (contentType.startsWith('image/')) {
+            if (contentType.startsWith('audio/') && openaiKey) {
+              return transcribeAudio(att, openaiKey);
+            } else if (contentType.startsWith('image/')) {
               return `[Image: ${att.name || 'image'}]`;
             } else if (contentType.startsWith('video/')) {
               return `[Video: ${att.name || 'video'}]`;
@@ -117,7 +166,7 @@ export class DiscordChannel implements Channel {
             } else {
               return `[File: ${att.name || 'file'}]`;
             }
-          },
+          }),
         );
         if (content) {
           content = `${content}\n${attachmentDescriptions.join('\n')}`;
