@@ -147,7 +147,7 @@ async function runCodexExec(prompt: string, resume: boolean): Promise<{ result: 
         '--color', 'never',
       );
       if (codexModel) args.push('-m', codexModel);
-      if (codexEffort) args.push('--effort', codexEffort);
+      if (codexEffort) args.push('-c', `model_reasoning_effort=${codexEffort}`);
       args.push(prompt);
     }
 
