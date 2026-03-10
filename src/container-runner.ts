@@ -233,7 +233,7 @@ function prepareGroupEnvironment(
         fs.copyFileSync(src, dst);
       }
     }
-    env.CODEX_CONFIG_DIR = sessionCodexDir;
+    env.CODEX_HOME = sessionCodexDir;
   } else {
     // Claude Code — pass real credentials directly
     if (envVars.ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY) {
