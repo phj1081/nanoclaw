@@ -128,6 +128,15 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Add work_dir column if it doesn't exist (migration for per-group working directory)
+  try {
+    database.exec(
+      `ALTER TABLE registered_groups ADD COLUMN work_dir TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -576,6 +585,7 @@ export function getRegisteredGroup(
         requires_trigger: number | null;
         is_main: number | null;
         agent_type: string | null;
+        work_dir: string | null;
       }
     | undefined;
   if (!row) return undefined;
@@ -599,6 +609,7 @@ export function getRegisteredGroup(
       row.requires_trigger === null ? undefined : row.requires_trigger === 1,
     isMain: row.is_main === 1 ? true : undefined,
     agentType: (row.agent_type as RegisteredGroup['agentType']) || undefined,
+    workDir: row.work_dir || undefined,
   };
 }
 
@@ -607,8 +618,8 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     throw new Error(`Invalid group folder "${group.folder}" for JID ${jid}`);
   }
   db.prepare(
-    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, agent_type)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT OR REPLACE INTO registered_groups (jid, name, folder, trigger_pattern, added_at, container_config, requires_trigger, is_main, agent_type, work_dir)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     jid,
     group.name,
@@ -619,6 +630,7 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
     group.requiresTrigger === undefined ? 1 : group.requiresTrigger ? 1 : 0,
     group.isMain ? 1 : 0,
     group.agentType || 'claude-code',
+    group.workDir || null,
   );
 }
 
@@ -633,6 +645,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     requires_trigger: number | null;
     is_main: number | null;
     agent_type: string | null;
+    work_dir: string | null;
   }>;
   const result: Record<string, RegisteredGroup> = {};
   for (const row of rows) {
@@ -655,6 +668,7 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
         row.requires_trigger === null ? undefined : row.requires_trigger === 1,
       isMain: row.is_main === 1 ? true : undefined,
       agentType: (row.agent_type as RegisteredGroup['agentType']) || undefined,
+      workDir: row.work_dir || undefined,
     };
   }
   return result;

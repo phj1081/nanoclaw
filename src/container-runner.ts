@@ -155,6 +155,8 @@ function prepareGroupEnvironment(
     NANOCLAW_IPC_DIR: groupIpcDir,
     NANOCLAW_GLOBAL_DIR: globalDir,
     NANOCLAW_EXTRA_DIR: extraDirs.length > 0 ? extraDirs[0] : '',
+    // Working directory override (agent uses this as cwd instead of group dir)
+    ...(group.workDir ? { NANOCLAW_WORK_DIR: group.workDir } : {}),
     // MCP server context
     NANOCLAW_CHAT_JID: group.folder,
     NANOCLAW_GROUP_FOLDER: group.folder,

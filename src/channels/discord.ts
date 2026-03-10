@@ -227,14 +227,11 @@ export class DiscordChannel implements Channel {
 
       // Convert @username mentions to Discord mention format
       const mentionMap: Record<string, string> = {
-        '눈쟁이': '216851709744513024',
+        눈쟁이: '216851709744513024',
       };
       let resolved = text;
       for (const [name, id] of Object.entries(mentionMap)) {
-        resolved = resolved.replace(
-          new RegExp(`@${name}`, 'g'),
-          `<@${id}>`,
-        );
+        resolved = resolved.replace(new RegExp(`@${name}`, 'g'), `<@${id}>`);
       }
 
       // Discord has a 2000 character limit per message — split if needed

@@ -20,6 +20,7 @@ export interface RegisteredGroup {
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
   agentType?: AgentType;
+  workDir?: string; // Working directory for the agent (defaults to group folder)
 }
 
 export interface NewMessage {

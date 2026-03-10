@@ -60,6 +60,8 @@ const GROUP_DIR = process.env.NANOCLAW_GROUP_DIR || '/workspace/group';
 const IPC_DIR = process.env.NANOCLAW_IPC_DIR || '/workspace/ipc';
 const GLOBAL_DIR = process.env.NANOCLAW_GLOBAL_DIR || '/workspace/global';
 const EXTRA_BASE = process.env.NANOCLAW_EXTRA_DIR || '/workspace/extra';
+// Optional: override cwd (agent works in this directory instead of GROUP_DIR)
+const WORK_DIR = process.env.NANOCLAW_WORK_DIR || '';
 
 const IPC_INPUT_DIR = path.join(IPC_DIR, 'input');
 const MAX_TURNS = 100;
@@ -417,6 +419,12 @@ async function runQuery(
       }
     }
   }
+  // When WORK_DIR is set, use it as cwd and include GROUP_DIR as additional directory
+  const effectiveCwd = WORK_DIR || GROUP_DIR;
+  if (WORK_DIR && WORK_DIR !== GROUP_DIR) {
+    extraDirs.push(GROUP_DIR);
+    log(`Work directory override: ${WORK_DIR} (group dir added to additionalDirectories)`);
+  }
   if (extraDirs.length > 0) {
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
@@ -440,7 +448,7 @@ async function runQuery(
   for await (const message of query({
     prompt: stream,
     options: {
-      cwd: GROUP_DIR,
+      cwd: effectiveCwd,
       model,
       thinking,
       effort,
@@ -550,6 +558,9 @@ async function main(): Promise<void> {
   // Clean up stale _close sentinel from previous container runs
   try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
 
+  // Effective working directory (WORK_DIR overrides GROUP_DIR)
+  const mainEffectiveCwd = WORK_DIR || GROUP_DIR;
+
   // Build initial prompt (drain any pending IPC messages too)
   let prompt = containerInput.prompt;
   if (containerInput.isScheduledTask) {
@@ -579,7 +590,7 @@ async function main(): Promise<void> {
       for await (const message of query({
         prompt: trimmedPrompt,
         options: {
-          cwd: GROUP_DIR,
+          cwd: mainEffectiveCwd,
           resume: sessionId,
           systemPrompt: undefined,
           allowedTools: [],
