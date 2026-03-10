@@ -407,23 +407,25 @@ async function runQuery(
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 
-  // Discover additional directories mounted at /workspace/extra/*
-  // These are passed to the SDK so their CLAUDE.md files are loaded automatically
+  // Discover additional directories
   const extraDirs: string[] = [];
-  const extraBase = EXTRA_BASE;
-  if (fs.existsSync(extraBase)) {
-    for (const entry of fs.readdirSync(extraBase)) {
-      const fullPath = path.join(extraBase, entry);
-      if (fs.statSync(fullPath).isDirectory()) {
-        extraDirs.push(fullPath);
-      }
-    }
-  }
+
   // When WORK_DIR is set, use it as cwd and include GROUP_DIR as additional directory
   const effectiveCwd = WORK_DIR || GROUP_DIR;
   if (WORK_DIR && WORK_DIR !== GROUP_DIR) {
     extraDirs.push(GROUP_DIR);
     log(`Work directory override: ${WORK_DIR} (group dir added to additionalDirectories)`);
+  } else {
+    // Only scan EXTRA_BASE when no WORK_DIR override (legacy container mount support)
+    const extraBase = EXTRA_BASE;
+    if (extraBase && fs.existsSync(extraBase)) {
+      for (const entry of fs.readdirSync(extraBase)) {
+        const fullPath = path.join(extraBase, entry);
+        if (fs.statSync(fullPath).isDirectory()) {
+          extraDirs.push(fullPath);
+        }
+      }
+    }
   }
   if (extraDirs.length > 0) {
     log(`Additional directories: ${extraDirs.join(', ')}`);
