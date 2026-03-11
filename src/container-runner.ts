@@ -261,6 +261,43 @@ function prepareGroupEnvironment(
       }
     }
 
+    // Inject nanoclaw MCP server into Codex config.toml
+    const mcpServerPath = path.join(
+      projectRoot,
+      'container',
+      'agent-runner',
+      'dist',
+      'ipc-mcp-stdio.js',
+    );
+    const configTomlPath = path.join(sessionCodexDir, 'config.toml');
+    if (fs.existsSync(mcpServerPath)) {
+      let toml = fs.existsSync(configTomlPath)
+        ? fs.readFileSync(configTomlPath, 'utf-8')
+        : '';
+      // Remove existing nanoclaw MCP section if present (to refresh env vars)
+      toml = toml.replace(
+        /\n?\[mcp_servers\.nanoclaw\][\s\S]*?(?=\n\[|$)/,
+        '',
+      );
+      const mcpSection = `
+[mcp_servers.nanoclaw]
+command = "node"
+args = [${JSON.stringify(mcpServerPath)}]
+
+[mcp_servers.nanoclaw.env]
+NANOCLAW_IPC_DIR = ${JSON.stringify(env.NANOCLAW_IPC_DIR)}
+NANOCLAW_CHAT_JID = ${JSON.stringify(group.folder)}
+NANOCLAW_GROUP_FOLDER = ${JSON.stringify(group.folder)}
+NANOCLAW_IS_MAIN = ${JSON.stringify(isMain ? '1' : '0')}
+`;
+      toml = toml.trimEnd() + '\n' + mcpSection;
+      fs.writeFileSync(configTomlPath, toml);
+    }
+
+    // Sanitize secrets: prevent API keys from leaking to codex subprocesses
+    delete env.ANTHROPIC_API_KEY;
+    delete env.CLAUDE_CODE_OAUTH_TOKEN;
+
     env.CODEX_HOME = sessionCodexDir;
   } else {
     // Claude Code — pass real credentials directly

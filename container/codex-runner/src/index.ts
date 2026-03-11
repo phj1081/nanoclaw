@@ -235,9 +235,15 @@ async function main(): Promise<void> {
   }
 
   // Query loop: run codex exec → wait for IPC message → repeat
-  // First exec is a fresh session; subsequent execs resume the last session.
-  let isFirstExec = true;
+  // If we have a previous sessionId, resume instead of starting fresh.
+  // CODEX_HOME is per-group persistent, so `resume --last` picks up the right session.
+  const hasPreviousSession = !!containerInput.sessionId;
+  let isFirstExec = !hasPreviousSession;
   let turnCount = 0;
+
+  if (hasPreviousSession) {
+    log(`Resuming previous session (sessionId: ${containerInput.sessionId})`);
+  }
 
   try {
     while (true) {
@@ -252,17 +258,23 @@ async function main(): Promise<void> {
       const { result, error } = await runCodexExec(prompt, !isFirstExec);
       isFirstExec = false;
 
+      // Generate a session marker so nanoclaw tracks this codex session.
+      // On next spawn, containerInput.sessionId will be set → resume --last.
+      const sessionId = containerInput.sessionId || `codex-${containerInput.groupFolder}-${Date.now()}`;
+
       if (error) {
         log(`Codex error: ${error}`);
         writeOutput({
           status: 'error',
           result: result || null,
+          newSessionId: sessionId,
           error,
         });
       } else {
         writeOutput({
           status: 'success',
           result: result || null,
+          newSessionId: sessionId,
         });
       }
 

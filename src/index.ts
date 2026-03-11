@@ -52,6 +52,7 @@ import {
   isSessionCommandAllowed,
 } from './session-commands.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import { startTokenRefreshLoop, stopTokenRefreshLoop } from './token-refresh.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -554,6 +555,7 @@ async function main(): Promise<void> {
   // Graceful shutdown handlers
   const shutdown = async (signal: string) => {
     logger.info({ signal }, 'Shutdown signal received');
+    stopTokenRefreshLoop();
     await queue.shutdown(10000);
     for (const ch of channels) await ch.disconnect();
     process.exit(0);
@@ -612,6 +614,9 @@ async function main(): Promise<void> {
     logger.fatal('No channels connected');
     process.exit(1);
   }
+
+  // Start OAuth token auto-refresh (before subsystems that spawn agents)
+  startTokenRefreshLoop();
 
   // Start subsystems (independently of connection handler)
   startSchedulerLoop({
