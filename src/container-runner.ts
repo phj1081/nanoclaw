@@ -62,6 +62,14 @@ function prepareGroupEnvironment(
     '.claude',
   );
   fs.mkdirSync(groupSessionsDir, { recursive: true });
+
+  // Sync credentials from user's home ~/.claude/ so per-group sessions stay fresh
+  const homeClaudeDir = path.join(os.homedir(), '.claude');
+  const credsSrc = path.join(homeClaudeDir, '.credentials.json');
+  if (fs.existsSync(credsSrc)) {
+    fs.copyFileSync(credsSrc, path.join(groupSessionsDir, '.credentials.json'));
+  }
+
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(
