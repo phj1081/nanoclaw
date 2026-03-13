@@ -614,7 +614,9 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: expect.stringMatching(/^Check this out\n\[Image: .+\.jpg\]$/),
+          content: expect.stringMatching(
+            /^Check this out\n\[Image: .+\.jpg\]$/,
+          ),
         }),
       );
     });
@@ -646,7 +648,9 @@ describe('DiscordChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'dc:1234567890123456',
         expect.objectContaining({
-          content: expect.stringMatching(/^\[Image: .+\.png\]\n\[File: b\.txt\]$/),
+          content: expect.stringMatching(
+            /^\[Image: .+\.png\]\n\[File: b\.txt\]$/,
+          ),
         }),
       );
     });
