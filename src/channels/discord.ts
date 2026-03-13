@@ -303,34 +303,29 @@ export class DiscordChannel implements Channel {
 
       const textChannel = channel as TextChannel;
 
-      // Extract image attachments from agent responses.
-      // Supports:
-      //   [SendImage: /absolute/path]           — explicit tag
-      //   [name.png](/absolute/path/name.png)   — markdown link with image extension
+      // Extract image attachments from markdown links with image extensions
+      // e.g. [name.png](/absolute/path/name.png)
       const IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
-      const SEND_IMAGE_RE = /\[SendImage:\s*(\/[^\]]+)\]/g;
       const MD_LINK_RE = /\[[^\]]*\]\((\/[^)]+)\)/g;
       const imageFiles: string[] = [];
       const seen = new Set<string>();
       let match;
 
-      while ((match = SEND_IMAGE_RE.exec(text)) !== null) {
-        const imgPath = match[1].trim();
-        if (!seen.has(imgPath) && fs.existsSync(imgPath)) {
-          imageFiles.push(imgPath);
-          seen.add(imgPath);
-        }
-      }
       while ((match = MD_LINK_RE.exec(text)) !== null) {
         const imgPath = match[1].trim();
-        if (!seen.has(imgPath) && IMAGE_EXTS.test(imgPath) && fs.existsSync(imgPath)) {
+        if (
+          !seen.has(imgPath) &&
+          IMAGE_EXTS.test(imgPath) &&
+          fs.existsSync(imgPath)
+        ) {
           imageFiles.push(imgPath);
           seen.add(imgPath);
         }
       }
       let cleaned = text
-        .replace(SEND_IMAGE_RE, '')
-        .replace(MD_LINK_RE, (full, p) => IMAGE_EXTS.test(p) && seen.has(p.trim()) ? '' : full)
+        .replace(MD_LINK_RE, (full, p) =>
+          IMAGE_EXTS.test(p) && seen.has(p.trim()) ? '' : full,
+        )
         .trim();
 
       // Convert @username mentions to Discord mention format
