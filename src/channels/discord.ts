@@ -508,6 +508,7 @@ export class DiscordChannel implements Channel {
       await msg.edit(text);
     } catch (err) {
       logger.debug({ jid, messageId, err }, 'Failed to edit Discord message');
+      throw err; // Re-throw so callers (e.g. dashboard) can reset message ID
     }
   }
 }
