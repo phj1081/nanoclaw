@@ -12,6 +12,7 @@ import os from 'os';
 import path from 'path';
 
 import { logger } from './logger.js';
+import { DATA_DIR } from './config.js';
 
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const FALLBACK_TOKEN_URL = 'https://api.anthropic.com/v1/oauth/token';
@@ -68,6 +69,30 @@ function writeCredentials(creds: CredentialsFile): void {
   const tempPath = `${credsPath}.tmp`;
   fs.writeFileSync(tempPath, JSON.stringify(creds, null, 2), { mode: 0o600 });
   fs.renameSync(tempPath, credsPath);
+
+  // Sync to all per-group session directories so running agents pick up the new token
+  syncToSessionDirs(credsPath);
+}
+
+function syncToSessionDirs(credsPath: string): void {
+  const sessionsDir = path.join(DATA_DIR, 'sessions');
+  try {
+    if (!fs.existsSync(sessionsDir)) return;
+    const groups = fs.readdirSync(sessionsDir);
+    let synced = 0;
+    for (const group of groups) {
+      const dest = path.join(sessionsDir, group, '.claude', '.credentials.json');
+      if (fs.existsSync(path.dirname(dest))) {
+        fs.copyFileSync(credsPath, dest);
+        synced++;
+      }
+    }
+    if (synced > 0) {
+      logger.info({ count: synced }, 'Synced credentials to session directories');
+    }
+  } catch (err) {
+    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Failed to sync credentials to sessions');
+  }
 }
 
 async function refreshToken(
@@ -87,10 +112,7 @@ async function refreshToken(
   for (const url of [TOKEN_URL, FALLBACK_TOKEN_URL]) {
     try {
       const controller = new AbortController();
-      const timeout = setTimeout(
-        () => controller.abort(),
-        REQUEST_TIMEOUT_MS,
-      );
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
       const res = await fetch(url, {
         method: 'POST',

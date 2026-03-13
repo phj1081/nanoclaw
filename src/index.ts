@@ -52,7 +52,10 @@ import {
   isSessionCommandAllowed,
 } from './session-commands.js';
 import { startSchedulerLoop } from './task-scheduler.js';
-import { startTokenRefreshLoop, stopTokenRefreshLoop } from './token-refresh.js';
+import {
+  startTokenRefreshLoop,
+  stopTokenRefreshLoop,
+} from './token-refresh.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -257,9 +260,11 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         await channel.sendMessage(chatJid, text);
         outputSentToUser = true;
       }
-      await channel.setTyping?.(chatJid, false);
-      resetIdleTimer();
     }
+
+    // Always clear typing and reset idle timer on any output (including null results)
+    await channel.setTyping?.(chatJid, false);
+    resetIdleTimer();
 
     if (result.status === 'success') {
       queue.notifyIdle(chatJid);

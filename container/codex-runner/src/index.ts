@@ -1,11 +1,14 @@
 /**
- * NanoClaw Codex Runner
- * Runs inside a container, receives config via stdin, executes Codex CLI, outputs result to stdout
+ * NanoClaw Codex Runner (app-server mode)
+ *
+ * Spawns a single `codex app-server` process and communicates via JSON-RPC
+ * over stdio. Supports streaming responses, session persistence (threadId),
+ * and mid-turn message injection via turn/steer.
  *
  * Input protocol:
  *   Stdin: Full ContainerInput JSON (read until EOF)
- *   IPC:   Follow-up messages written as JSON files to /workspace/ipc/input/
- *          Sentinel: /workspace/ipc/input/_close — signals session end
+ *   IPC:   Follow-up messages as JSON files in $NANOCLAW_IPC_DIR/input/
+ *          Sentinel: _close — signals session end
  *
  * Stdout protocol:
  *   Each result is wrapped in OUTPUT_START_MARKER / OUTPUT_END_MARKER pairs.
@@ -14,10 +17,13 @@
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import readline from 'readline';
+
+// ── Types ──────────────────────────────────────────────────────────
 
 interface ContainerInput {
   prompt: string;
-  sessionId?: string;
+  sessionId?: string;   // threadId from previous session
   groupFolder: string;
   chatJid: string;
   isMain: boolean;
@@ -33,10 +39,24 @@ interface ContainerOutput {
   error?: string;
 }
 
-// Paths configurable via env vars (defaults to container paths for backwards compat)
+interface JsonRpcRequest {
+  method: string;
+  id?: number;
+  params?: Record<string, unknown>;
+}
+
+interface JsonRpcResponse {
+  id?: number;
+  method?: string;
+  result?: Record<string, unknown>;
+  error?: { code: number; message: string };
+  params?: Record<string, unknown>;
+}
+
+// ── Constants ──────────────────────────────────────────────────────
+
 const GROUP_DIR = process.env.NANOCLAW_GROUP_DIR || '/workspace/group';
 const IPC_DIR = process.env.NANOCLAW_IPC_DIR || '/workspace/ipc';
-// Optional: override cwd (agent works in this directory instead of GROUP_DIR)
 const WORK_DIR = process.env.NANOCLAW_WORK_DIR || '';
 const IPC_INPUT_DIR = path.join(IPC_DIR, 'input');
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
@@ -45,6 +65,12 @@ const MAX_TURNS = 100;
 
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
+
+const EFFECTIVE_CWD = WORK_DIR || GROUP_DIR;
+const CODEX_MODEL = process.env.CODEX_MODEL || '';
+const CODEX_EFFORT = process.env.CODEX_EFFORT || '';
+
+// ── Helpers ────────────────────────────────────────────────────────
 
 function writeOutput(output: ContainerOutput): void {
   console.log(OUTPUT_START_MARKER);
@@ -120,88 +146,386 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
-/**
- * Run a Codex CLI exec command and return the result.
- * If resume=true, resumes the most recent session instead of starting fresh.
- */
-async function runCodexExec(prompt: string, resume: boolean): Promise<{ result: string; error?: string }> {
-  return new Promise((resolve) => {
-    const args: string[] = [];
-    const effectiveCwd = WORK_DIR || GROUP_DIR;
-    const codexModel = process.env.CODEX_MODEL || '';
-    const codexEffort = process.env.CODEX_EFFORT || '';
+// ── App-Server Client ──────────────────────────────────────────────
 
-    if (resume) {
-      args.push(
-        'exec', 'resume', '--last',
-        '--dangerously-bypass-approvals-and-sandbox',
-        '--skip-git-repo-check',
-        prompt,
-      );
-    } else {
-      args.push(
-        'exec',
-        '--dangerously-bypass-approvals-and-sandbox',
-        '-C', effectiveCwd,
-        '--skip-git-repo-check',
-        '--color', 'never',
-      );
-      if (codexModel) args.push('-m', codexModel);
-      if (codexEffort) args.push('-c', `model_reasoning_effort=${codexEffort}`);
-      args.push(prompt);
-    }
+class CodexAppServer {
+  private proc: ChildProcess;
+  private rl: readline.Interface;
+  private nextId = 1;
+  private pending = new Map<number, {
+    resolve: (value: JsonRpcResponse) => void;
+    reject: (err: Error) => void;
+  }>();
+  private notificationHandler: ((msg: JsonRpcResponse) => void) | null = null;
+  private serverRequestHandler: ((msg: JsonRpcResponse) => void) | null = null;
 
-    log(`Running: codex ${args.slice(0, 6).join(' ')}... (resume=${resume})`);
-
-    const codex: ChildProcess = spawn('codex', args, {
+  constructor() {
+    this.proc = spawn('codex', ['app-server'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: effectiveCwd,
+      cwd: EFFECTIVE_CWD,
       env: { ...process.env },
     });
 
-    let stdout = '';
-    let stderr = '';
+    this.rl = readline.createInterface({ input: this.proc.stdout! });
 
-    codex.stdout?.on('data', (data: Buffer) => {
-      stdout += data.toString();
+    this.rl.on('line', (line: string) => {
+      if (!line.trim()) return;
+      try {
+        const msg: JsonRpcResponse = JSON.parse(line);
+        this.handleMessage(msg);
+      } catch {
+        // Non-JSON output, ignore
+      }
     });
 
-    codex.stderr?.on('data', (data: Buffer) => {
-      const chunk = data.toString();
-      stderr += chunk;
-      // Log stderr lines for debugging
-      for (const line of chunk.trim().split('\n')) {
+    this.proc.stderr?.on('data', (data: Buffer) => {
+      for (const line of data.toString().trim().split('\n')) {
         if (line) log(line);
       }
     });
 
-    codex.on('close', (code: number | null) => {
-      log(`Codex exited with code ${code}`);
+    this.proc.on('error', (err: Error) => {
+      log(`App-server spawn error: ${err.message}`);
+      // Reject all pending requests
+      for (const [, { reject }] of this.pending) {
+        reject(err);
+      }
+      this.pending.clear();
+    });
 
-      if (code !== 0) {
+    this.proc.on('close', (code: number | null) => {
+      log(`App-server exited with code ${code}`);
+      const err = new Error(`App-server exited with code ${code}`);
+      for (const [, { reject }] of this.pending) {
+        reject(err);
+      }
+      this.pending.clear();
+    });
+  }
+
+  private handleMessage(msg: JsonRpcResponse): void {
+    // Response to a request we made
+    if (msg.id !== undefined && this.pending.has(msg.id)) {
+      const handler = this.pending.get(msg.id)!;
+      this.pending.delete(msg.id);
+      handler.resolve(msg);
+      return;
+    }
+
+    // Server-initiated request (has id + method) — needs a response
+    if (msg.id !== undefined && msg.method) {
+      this.serverRequestHandler?.(msg);
+      return;
+    }
+
+    // Notification (has method, no id)
+    if (msg.method) {
+      this.notificationHandler?.(msg);
+    }
+  }
+
+  setNotificationHandler(handler: ((msg: JsonRpcResponse) => void) | null): void {
+    this.notificationHandler = handler;
+  }
+
+  setServerRequestHandler(handler: ((msg: JsonRpcResponse) => void) | null): void {
+    this.serverRequestHandler = handler;
+  }
+
+  send(msg: JsonRpcRequest): void {
+    this.proc.stdin!.write(JSON.stringify(msg) + '\n');
+  }
+
+  async request(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<JsonRpcResponse> {
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Request ${method} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      this.pending.set(id, {
+        resolve: (resp) => {
+          clearTimeout(timer);
+          resolve(resp);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
+
+      this.send({ method, id, params });
+    });
+  }
+
+  respond(id: number, result: Record<string, unknown>): void {
+    this.proc.stdin!.write(JSON.stringify({ id, result }) + '\n');
+  }
+
+  async initialize(): Promise<void> {
+    const resp = await this.request('initialize', {
+      clientInfo: { name: 'nanoclaw', title: 'NanoClaw Codex', version: '1.0' },
+      capabilities: { experimentalApi: false },
+    }, 15_000);
+
+    if (resp.error) {
+      throw new Error(`Initialize failed: ${resp.error.message}`);
+    }
+
+    // Send initialized notification
+    this.send({ method: 'initialized' });
+    log('App-server initialized');
+  }
+
+  async startThread(): Promise<string> {
+    const params: Record<string, unknown> = {
+      cwd: EFFECTIVE_CWD,
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+      experimentalRawEvents: false,
+      persistExtendedHistory: false,
+    };
+    if (CODEX_MODEL) params.model = CODEX_MODEL;
+
+    const resp = await this.request('thread/start', params, 30_000);
+    if (resp.error) {
+      throw new Error(`thread/start failed: ${resp.error.message}`);
+    }
+
+    const thread = resp.result?.thread as Record<string, unknown> | undefined;
+    const threadId = thread?.id as string;
+    log(`Thread started: ${threadId}`);
+    return threadId;
+  }
+
+  async resumeThread(threadId: string): Promise<string> {
+    const params: Record<string, unknown> = {
+      threadId,
+      cwd: EFFECTIVE_CWD,
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+      persistExtendedHistory: false,
+    };
+    if (CODEX_MODEL) params.model = CODEX_MODEL;
+
+    const resp = await this.request('thread/resume', params, 30_000);
+    if (resp.error) {
+      // If resume fails (e.g., thread not found), start a new one
+      log(`thread/resume failed: ${resp.error.message}, starting new thread`);
+      return this.startThread();
+    }
+
+    const thread = resp.result?.thread as Record<string, unknown> | undefined;
+    const actualId = (thread?.id as string) || threadId;
+    log(`Thread resumed: ${actualId}`);
+    return actualId;
+  }
+
+  async startTurn(threadId: string, text: string): Promise<string> {
+    const params: Record<string, unknown> = {
+      threadId,
+      input: [{ type: 'text', text, text_elements: [] }],
+    };
+    if (CODEX_EFFORT) params.effort = CODEX_EFFORT;
+
+    const resp = await this.request('turn/start', params, 30_000);
+    if (resp.error) {
+      throw new Error(`turn/start failed: ${resp.error.message}`);
+    }
+
+    const turn = resp.result?.turn as Record<string, unknown> | undefined;
+    const turnId = turn?.id as string;
+    log(`Turn started: ${turnId}`);
+    return turnId;
+  }
+
+  async steerTurn(threadId: string, turnId: string, text: string): Promise<void> {
+    const resp = await this.request('turn/steer', {
+      threadId,
+      input: [{ type: 'text', text, text_elements: [] }],
+      expectedTurnId: turnId,
+    }, 10_000);
+
+    if (resp.error) {
+      log(`turn/steer failed: ${resp.error.message}`);
+    }
+  }
+
+  async interruptTurn(threadId: string, turnId: string): Promise<void> {
+    try {
+      await this.request('turn/interrupt', { threadId, turnId }, 10_000);
+    } catch (err) {
+      log(`turn/interrupt failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  kill(): void {
+    try {
+      this.proc.kill('SIGTERM');
+      setTimeout(() => {
+        if (!this.proc.killed) this.proc.kill('SIGKILL');
+      }, 5000);
+    } catch { /* ignore */ }
+  }
+
+  get alive(): boolean {
+    return !this.proc.killed && this.proc.exitCode === null;
+  }
+}
+
+// ── Turn Execution ─────────────────────────────────────────────────
+
+/**
+ * Execute a turn and collect the agent's text response.
+ * While the turn is running, polls IPC for new messages and injects
+ * them via turn/steer (mid-execution message injection).
+ * Returns when turn/completed notification is received.
+ */
+async function executeTurn(
+  server: CodexAppServer,
+  threadId: string,
+  prompt: string,
+): Promise<{ result: string; error?: string; turnId: string }> {
+  return new Promise((resolve) => {
+    let agentText = '';
+    let turnId = '';
+    let resolved = false;
+    let ipcPollTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const cleanup = () => {
+      server.setNotificationHandler(null);
+      server.setServerRequestHandler(null);
+      if (ipcPollTimer) {
+        clearTimeout(ipcPollTimer);
+        ipcPollTimer = null;
+      }
+    };
+
+    // Timeout safety (5 minutes per turn)
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+        log('Turn execution timed out (5min)');
         resolve({
-          result: stdout.trim() || '',
-          error: `Codex exited with code ${code}: ${stderr.slice(-500)}`,
+          result: agentText || '',
+          error: 'Turn timed out after 5 minutes',
+          turnId,
         });
+      }
+    }, 5 * 60 * 1000);
+
+    // IPC polling during turn — steer messages into the running turn
+    const pollIpcDuringTurn = () => {
+      if (resolved) return;
+
+      // Check close sentinel
+      if (shouldClose()) {
+        log('Close sentinel during turn, interrupting');
+        if (turnId) {
+          server.interruptTurn(threadId, turnId).catch(() => {});
+        }
         return;
       }
 
-      // Extract the meaningful output
-      const result = stdout.trim();
-      resolve({ result });
+      // Check for new messages to steer
+      const messages = drainIpcInput();
+      if (messages.length > 0 && turnId) {
+        const text = messages.join('\n');
+        log(`Steering message into turn (${text.length} chars)`);
+        server.steerTurn(threadId, turnId, text).catch((err) => {
+          log(`Steer failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }
+
+      ipcPollTimer = setTimeout(pollIpcDuringTurn, IPC_POLL_MS);
+    };
+
+    // Handle notifications (streaming events)
+    server.setNotificationHandler((msg) => {
+      if (resolved) return;
+
+      switch (msg.method) {
+        case 'item/agentMessage/delta': {
+          const delta = (msg.params as Record<string, unknown>)?.delta as string;
+          if (delta) agentText += delta;
+          break;
+        }
+
+        case 'item/completed': {
+          const item = (msg.params as Record<string, unknown>)?.item as Record<string, unknown>;
+          if (item?.type === 'agentMessage') {
+            // Use authoritative text from completed item
+            const text = item.text as string;
+            if (text) agentText = text;
+          }
+          break;
+        }
+
+        case 'turn/completed': {
+          const turn = (msg.params as Record<string, unknown>)?.turn as Record<string, unknown>;
+          const status = turn?.status as string;
+          const error = turn?.error as Record<string, unknown> | null;
+
+          clearTimeout(timer);
+          resolved = true;
+          cleanup();
+
+          if (status === 'failed') {
+            const errMsg = (error?.message as string) || 'Turn failed';
+            resolve({ result: agentText || '', error: errMsg, turnId });
+          } else {
+            resolve({ result: agentText, turnId });
+          }
+          break;
+        }
+
+        case 'turn/started': {
+          const turn = (msg.params as Record<string, unknown>)?.turn as Record<string, unknown>;
+          if (turn?.id) turnId = turn.id as string;
+          break;
+        }
+      }
     });
 
-    codex.on('error', (err: Error) => {
-      resolve({
-        result: '',
-        error: `Failed to spawn codex: ${err.message}`,
+    // Handle server requests (approval auto-accept)
+    server.setServerRequestHandler((msg) => {
+      if (msg.id === undefined) return;
+
+      if (msg.method === 'item/commandExecution/requestApproval' ||
+          msg.method === 'item/fileChange/requestApproval' ||
+          msg.method === 'item/permissions/requestApproval') {
+        server.respond(msg.id, { decision: 'accept' });
+        return;
+      }
+
+      // Unknown server request — accept generically
+      server.respond(msg.id, {});
+    });
+
+    // Start IPC polling for mid-turn message injection
+    ipcPollTimer = setTimeout(pollIpcDuringTurn, IPC_POLL_MS);
+
+    // Start the turn
+    server.startTurn(threadId, prompt)
+      .then((id) => { turnId = id; })
+      .catch((err) => {
+        if (!resolved) {
+          clearTimeout(timer);
+          resolved = true;
+          cleanup();
+          resolve({
+            result: '',
+            error: `Failed to start turn: ${err.message}`,
+            turnId: '',
+          });
+        }
       });
-    });
-
-    // Close stdin immediately since we pass prompt as argument
-    codex.stdin?.end();
   });
 }
+
+// ── Main ───────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
@@ -215,13 +539,12 @@ async function main(): Promise<void> {
     writeOutput({
       status: 'error',
       result: null,
-      error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`
+      error: `Failed to parse input: ${err instanceof Error ? err.message : String(err)}`,
     });
     process.exit(1);
   }
 
   fs.mkdirSync(IPC_INPUT_DIR, { recursive: true });
-  // Clean up stale _close sentinel
   try { fs.unlinkSync(IPC_INPUT_CLOSE_SENTINEL); } catch { /* ignore */ }
 
   // Build initial prompt
@@ -234,57 +557,59 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
-  // Query loop: run codex exec → wait for IPC message → repeat
-  // If we have a previous sessionId, resume instead of starting fresh.
-  // CODEX_HOME is per-group persistent, so `resume --last` picks up the right session.
-  const hasPreviousSession = !!containerInput.sessionId;
-  let isFirstExec = !hasPreviousSession;
-  let turnCount = 0;
-
-  if (hasPreviousSession) {
-    log(`Resuming previous session (sessionId: ${containerInput.sessionId})`);
-  }
+  // Spawn app-server
+  const server = new CodexAppServer();
 
   try {
+    await server.initialize();
+
+    // Start or resume thread
+    const threadId = containerInput.sessionId
+      ? await server.resumeThread(containerInput.sessionId)
+      : await server.startThread();
+
+    let turnCount = 0;
+
+    // Main turn loop
     while (true) {
       turnCount++;
       if (turnCount > MAX_TURNS) {
         log(`Turn limit reached (${MAX_TURNS}), exiting`);
-        writeOutput({ status: 'success', result: '[세션 턴 제한 도달. 새 메시지로 다시 시작됩니다.]' });
+        writeOutput({
+          status: 'success',
+          result: '[세션 턴 제한 도달. 새 메시지로 다시 시작됩니다.]',
+          newSessionId: threadId,
+        });
         break;
       }
-      log(`Starting codex exec (first=${isFirstExec}, turn=${turnCount}/${MAX_TURNS})...`);
 
-      const { result, error } = await runCodexExec(prompt, !isFirstExec);
-      isFirstExec = false;
+      log(`Starting turn ${turnCount}/${MAX_TURNS}...`);
 
-      // Generate a session marker so nanoclaw tracks this codex session.
-      // On next spawn, containerInput.sessionId will be set → resume --last.
-      const sessionId = containerInput.sessionId || `codex-${containerInput.groupFolder}-${Date.now()}`;
+      const { result, error } = await executeTurn(server, threadId, prompt);
 
       if (error) {
-        log(`Codex error: ${error}`);
+        log(`Turn error: ${error}`);
         writeOutput({
           status: 'error',
           result: result || null,
-          newSessionId: sessionId,
+          newSessionId: threadId,
           error,
         });
       } else {
         writeOutput({
           status: 'success',
           result: result || null,
-          newSessionId: sessionId,
+          newSessionId: threadId,
         });
       }
 
-      // Check if close was requested
+      // Check close sentinel
       if (shouldClose()) {
         log('Close sentinel detected, exiting');
         break;
       }
 
-      log('Codex exec done, waiting for next IPC message...');
+      log('Turn done, waiting for next IPC message...');
 
       const nextMessage = await waitForIpcMessage();
       if (nextMessage === null) {
@@ -292,7 +617,7 @@ async function main(): Promise<void> {
         break;
       }
 
-      log(`Got new message (${nextMessage.length} chars), starting new codex exec`);
+      log(`Got new message (${nextMessage.length} chars)`);
       prompt = nextMessage;
     }
   } catch (err) {
@@ -303,7 +628,8 @@ async function main(): Promise<void> {
       result: null,
       error: errorMessage,
     });
-    process.exit(1);
+  } finally {
+    server.kill();
   }
 }
 

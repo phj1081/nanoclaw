@@ -275,10 +275,7 @@ function prepareGroupEnvironment(
         ? fs.readFileSync(configTomlPath, 'utf-8')
         : '';
       // Remove existing nanoclaw MCP section if present (to refresh env vars)
-      toml = toml.replace(
-        /\n?\[mcp_servers\.nanoclaw\][\s\S]*?(?=\n\[|$)/,
-        '',
-      );
+      toml = toml.replace(/\n?\[mcp_servers\.nanoclaw\][\s\S]*?(?=\n\[|$)/, '');
       const mcpSection = `
 [mcp_servers.nanoclaw]
 command = "node"

@@ -1,25 +1,27 @@
 # NanoClaw
 
-Personal Claude assistant. See [README.md](README.md) for philosophy and setup. See [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md) for architecture decisions.
+Dual-agent AI assistant (Claude Code + Codex) over Discord. Fork of [qwibitai/nanoclaw](https://github.com/qwibitai/nanoclaw).
 
 ## Quick Context
 
-Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+Two systemd services (`nanoclaw`, `nanoclaw-codex`) share the same codebase but run with separate stores, data, and groups. Agents run as direct host processes (no containers). Claude Code uses the Agent SDK; Codex uses `codex app-server` via JSON-RPC. OAuth tokens auto-refresh and sync to per-group session dirs.
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
-| `src/channels/registry.ts` | Channel registry (self-registration at startup) |
+| `src/container-runner.ts` | Spawns agent processes, manages env/sessions/MCP |
+| `src/token-refresh.ts` | OAuth auto-refresh + session directory sync |
+| `src/channels/discord.ts` | Discord channel (8s typing refresh) |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
-| `src/container-runner.ts` | Spawns agent containers with mounts |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
+| `container/agent-runner/` | Claude Code runner (Agent SDK) |
+| `container/codex-runner/` | Codex runner (app-server JSON-RPC, streaming, turn/steer) |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
-| `container/skills/agent-browser.md` | Browser automation tool (available to all agents via Bash) |
 
 ## Skills
 
@@ -37,28 +39,33 @@ Single Node.js process with skill-based channel system. Channels (WhatsApp, Tele
 Run commands directly—don't tell the user to run them.
 
 ```bash
-npm run dev          # Run with hot reload
-npm run build        # Compile TypeScript
-./container/build.sh # Rebuild agent container
+npm run build                              # Build main project
+cd container/agent-runner && npm run build # Build Claude runner
+cd container/codex-runner && npm run build # Build Codex runner
+npm run dev                                # Dev mode with hot reload
 ```
 
-Service management:
+Service management (Linux):
 ```bash
-# macOS (launchd)
-launchctl load ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist
-launchctl kickstart -k gui/$(id -u)/com.nanoclaw  # restart
-
-# Linux (systemd)
-systemctl --user start nanoclaw
-systemctl --user stop nanoclaw
-systemctl --user restart nanoclaw
+systemctl --user restart nanoclaw nanoclaw-codex  # Restart both
+systemctl --user status nanoclaw                  # Check status
+journalctl --user -u nanoclaw -f                  # Follow logs
 ```
 
-## Troubleshooting
+Deploy to server: `scp dist/*.js clone-ej@100.64.185.108:~/nanoclaw/dist/`
 
-**WhatsApp not connecting after upgrade:** WhatsApp is now a separate channel fork, not bundled in core. Run `/add-whatsapp` (or `git remote add whatsapp https://github.com/qwibitai/nanoclaw-whatsapp.git && git fetch whatsapp main && git merge whatsapp/main && npm run build`) to install it. Existing auth credentials and groups are preserved.
+## Dual-Service Architecture
 
-## Container Build Cache
+- `nanoclaw.service` — Claude Code bot (`@claude`), uses `store/`, `data/`, `groups/`
+- `nanoclaw-codex.service` — Codex bot (`@codex`), uses `store-codex/`, `data-codex/`, `groups-codex/`
+- Both share the same codebase (`dist/index.js`), differentiated by env vars (`NANOCLAW_STORE_DIR`, etc.)
+- Channel registration is per-service DB (`registered_groups` table)
 
-The container buildkit caches the build context aggressively. `--no-cache` alone does NOT invalidate COPY steps — the builder's volume retains stale files. To force a truly clean rebuild, prune the builder then re-run `./container/build.sh`.
+## Codex App-Server
+
+Codex runner uses `codex app-server` JSON-RPC (not `codex exec`):
+- `thread/start` / `thread/resume` for session persistence (threadId-based)
+- `turn/start` for streaming responses (`item/agentMessage/delta`)
+- `turn/steer` for mid-execution message injection (IPC polling during turn)
+- `approvalPolicy: "never"` + `sandbox: "danger-full-access"` for bypass
+- Per-group: model (`CODEX_MODEL`), effort (`CODEX_EFFORT`), MCP servers via `config.toml`
