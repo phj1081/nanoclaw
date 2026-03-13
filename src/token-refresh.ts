@@ -81,17 +81,28 @@ function syncToSessionDirs(credsPath: string): void {
     const groups = fs.readdirSync(sessionsDir);
     let synced = 0;
     for (const group of groups) {
-      const dest = path.join(sessionsDir, group, '.claude', '.credentials.json');
+      const dest = path.join(
+        sessionsDir,
+        group,
+        '.claude',
+        '.credentials.json',
+      );
       if (fs.existsSync(path.dirname(dest))) {
         fs.copyFileSync(credsPath, dest);
         synced++;
       }
     }
     if (synced > 0) {
-      logger.info({ count: synced }, 'Synced credentials to session directories');
+      logger.info(
+        { count: synced },
+        'Synced credentials to session directories',
+      );
     }
   } catch (err) {
-    logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Failed to sync credentials to sessions');
+    logger.warn(
+      { err: err instanceof Error ? err.message : String(err) },
+      'Failed to sync credentials to sessions',
+    );
   }
 }
 

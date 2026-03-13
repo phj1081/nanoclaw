@@ -4,10 +4,10 @@ import fs from 'fs';
 
 import { ASSISTANT_NAME, SCHEDULER_POLL_INTERVAL, TIMEZONE } from './config.js';
 import {
-  ContainerOutput,
-  runContainerAgent,
+  AgentOutput,
+  runAgentProcess,
   writeTasksSnapshot,
-} from './container-runner.js';
+} from './agent-runner.js';
 import {
   getAllTasks,
   getDueTasks,
@@ -69,7 +69,7 @@ export interface SchedulerDependencies {
   onProcess: (
     groupJid: string,
     proc: ChildProcess,
-    containerName: string,
+    processName: string,
     groupFolder: string,
   ) => void;
   sendMessage: (jid: string, text: string) => Promise<void>;
@@ -129,7 +129,7 @@ async function runTask(
     return;
   }
 
-  // Update tasks snapshot for container to read (filtered by group)
+  // Update tasks snapshot for agent to read (filtered by group)
   const isMain = group.isMain === true;
   const tasks = getAllTasks();
   writeTasksSnapshot(
@@ -154,7 +154,7 @@ async function runTask(
   const sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
 
-  // After the task produces a result, close the container promptly.
+  // After the task produces a result, close the agent promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
   // query loop to time out. A short delay handles any final MCP calls.
   const TASK_CLOSE_DELAY_MS = 10000;
@@ -163,13 +163,13 @@ async function runTask(
   const scheduleClose = () => {
     if (closeTimer) return; // already scheduled
     closeTimer = setTimeout(() => {
-      logger.debug({ taskId: task.id }, 'Closing task container after result');
+      logger.debug({ taskId: task.id }, 'Closing task agent after result');
       deps.queue.closeStdin(task.chat_jid);
     }, TASK_CLOSE_DELAY_MS);
   };
 
   try {
-    const output = await runContainerAgent(
+    const output = await runAgentProcess(
       group,
       {
         prompt: task.prompt,
@@ -180,9 +180,9 @@ async function runTask(
         isScheduledTask: true,
         assistantName: ASSISTANT_NAME,
       },
-      (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
-      async (streamedOutput: ContainerOutput) => {
+      (proc, processName) =>
+        deps.onProcess(task.chat_jid, proc, processName, task.group_folder),
+      async (streamedOutput: AgentOutput) => {
         if (streamedOutput.result) {
           result = streamedOutput.result;
           // Forward result to user (sendMessage handles formatting)

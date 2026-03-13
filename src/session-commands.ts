@@ -26,7 +26,7 @@ export function isSessionCommandAllowed(
   return isMainGroup || isFromMe;
 }
 
-/** Minimal agent result interface — matches the subset of ContainerOutput used here. */
+/** Minimal agent result interface — matches the subset of AgentOutput used here. */
 export interface AgentResult {
   status: 'success' | 'error';
   result?: string | object | null;

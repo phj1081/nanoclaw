@@ -8,8 +8,8 @@ import os from 'os';
 import path from 'path';
 
 import {
-  CONTAINER_MAX_OUTPUT_SIZE,
-  CONTAINER_TIMEOUT,
+  AGENT_MAX_OUTPUT_SIZE,
+  AGENT_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -24,7 +24,7 @@ import { RegisteredGroup } from './types.js';
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
-export interface ContainerInput {
+export interface AgentInput {
   prompt: string;
   sessionId?: string;
   groupFolder: string;
@@ -35,7 +35,7 @@ export interface ContainerInput {
   agentType?: 'claude-code' | 'codex';
 }
 
-export interface ContainerOutput {
+export interface AgentOutput {
   status: 'success' | 'error';
   result: string | null;
   newSessionId?: string;
@@ -137,8 +137,8 @@ function prepareGroupEnvironment(
 
   // Additional mount directories (validated)
   const extraDirs: string[] = [];
-  if (group.containerConfig?.additionalMounts) {
-    for (const mount of group.containerConfig.additionalMounts) {
+  if (group.agentConfig?.additionalMounts) {
+    for (const mount of group.agentConfig.additionalMounts) {
       if (fs.existsSync(mount.hostPath)) {
         extraDirs.push(mount.hostPath);
       }
@@ -212,12 +212,12 @@ function prepareGroupEnvironment(
 
     // Codex model/effort configuration (per-group overrides global)
     const codexModel =
-      group.containerConfig?.codexModel ||
+      group.agentConfig?.codexModel ||
       envVars.CODEX_MODEL ||
       process.env.CODEX_MODEL;
     if (codexModel) env.CODEX_MODEL = codexModel;
     const codexEffort =
-      group.containerConfig?.codexEffort ||
+      group.agentConfig?.codexEffort ||
       envVars.CODEX_EFFORT ||
       process.env.CODEX_EFFORT;
     if (codexEffort) env.CODEX_EFFORT = codexEffort;
@@ -321,23 +321,23 @@ NANOCLAW_IS_MAIN = ${JSON.stringify(isMain ? '1' : '0')}
       const val = envVars[key as keyof typeof envVars] || process.env[key];
       if (val) env[key] = val;
     }
-    if (group.containerConfig?.claudeModel) {
-      env.CLAUDE_MODEL = group.containerConfig.claudeModel;
+    if (group.agentConfig?.claudeModel) {
+      env.CLAUDE_MODEL = group.agentConfig.claudeModel;
     }
-    if (group.containerConfig?.claudeEffort) {
-      env.CLAUDE_EFFORT = group.containerConfig.claudeEffort;
+    if (group.agentConfig?.claudeEffort) {
+      env.CLAUDE_EFFORT = group.agentConfig.claudeEffort;
     }
   }
 
   return { env, groupDir, runnerDir };
 }
 
-export async function runContainerAgent(
+export async function runAgentProcess(
   group: RegisteredGroup,
-  input: ContainerInput,
-  onProcess: (proc: ChildProcess, containerName: string) => void,
-  onOutput?: (output: ContainerOutput) => Promise<void>,
-): Promise<ContainerOutput> {
+  input: AgentInput,
+  onProcess: (proc: ChildProcess, processName: string) => void,
+  onOutput?: (output: AgentOutput) => Promise<void>,
+): Promise<AgentOutput> {
   const startTime = Date.now();
   const { env, groupDir, runnerDir } = prepareGroupEnvironment(
     group,
@@ -400,7 +400,7 @@ export async function runContainerAgent(
       const chunk = data.toString();
 
       if (!stdoutTruncated) {
-        const remaining = CONTAINER_MAX_OUTPUT_SIZE - stdout.length;
+        const remaining = AGENT_MAX_OUTPUT_SIZE - stdout.length;
         if (chunk.length > remaining) {
           stdout += chunk.slice(0, remaining);
           stdoutTruncated = true;
@@ -426,7 +426,7 @@ export async function runContainerAgent(
           parseBuffer = parseBuffer.slice(endIdx + OUTPUT_END_MARKER.length);
 
           try {
-            const parsed: ContainerOutput = JSON.parse(jsonStr);
+            const parsed: AgentOutput = JSON.parse(jsonStr);
             if (parsed.newSessionId) {
               newSessionId = parsed.newSessionId;
             }
@@ -450,7 +450,7 @@ export async function runContainerAgent(
         if (line) logger.debug({ agent: group.folder }, line);
       }
       if (stderrTruncated) return;
-      const remaining = CONTAINER_MAX_OUTPUT_SIZE - stderr.length;
+      const remaining = AGENT_MAX_OUTPUT_SIZE - stderr.length;
       if (chunk.length > remaining) {
         stderr += chunk.slice(0, remaining);
         stderrTruncated = true;
@@ -461,7 +461,7 @@ export async function runContainerAgent(
 
     let timedOut = false;
     let hadStreamingOutput = false;
-    const configTimeout = group.containerConfig?.timeout || CONTAINER_TIMEOUT;
+    const configTimeout = group.agentConfig?.timeout || AGENT_TIMEOUT;
     const timeoutMs = Math.max(configTimeout, IDLE_TIMEOUT + 30_000);
 
     const killOnTimeout = () => {
@@ -596,7 +596,7 @@ export async function runContainerAgent(
           const lines = stdout.trim().split('\n');
           jsonLine = lines[lines.length - 1];
         }
-        const output: ContainerOutput = JSON.parse(jsonLine);
+        const output: AgentOutput = JSON.parse(jsonLine);
         logger.info(
           { group: group.name, duration, status: output.status },
           'Agent completed',

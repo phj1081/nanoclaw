@@ -2,7 +2,7 @@ import { ChildProcess } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
-import { DATA_DIR, MAX_CONCURRENT_CONTAINERS } from './config.js';
+import { DATA_DIR, MAX_CONCURRENT_AGENTS } from './config.js';
 import { logger } from './logger.js';
 
 interface QueuedTask {
@@ -17,12 +17,12 @@ const BASE_RETRY_MS = 5000;
 interface GroupState {
   active: boolean;
   idleWaiting: boolean;
-  isTaskContainer: boolean;
+  isTaskProcess: boolean;
   runningTaskId: string | null;
   pendingMessages: boolean;
   pendingTasks: QueuedTask[];
   process: ChildProcess | null;
-  containerName: string | null;
+  processName: string | null;
   groupFolder: string | null;
   retryCount: number;
 }
@@ -41,12 +41,12 @@ export class GroupQueue {
       state = {
         active: false,
         idleWaiting: false,
-        isTaskContainer: false,
+        isTaskProcess: false,
         runningTaskId: null,
         pendingMessages: false,
         pendingTasks: [],
         process: null,
-        containerName: null,
+        processName: null,
         groupFolder: null,
         retryCount: 0,
       };
@@ -64,18 +64,18 @@ export class GroupQueue {
 
     const state = this.getGroup(groupJid);
 
-    // Pre-set groupFolder so sendMessage can pipe IPC while container starts
+    // Pre-set groupFolder so sendMessage can pipe IPC while agent process starts
     if (groupFolder && !state.groupFolder) {
       state.groupFolder = groupFolder;
     }
 
     if (state.active) {
       state.pendingMessages = true;
-      logger.debug({ groupJid }, 'Container active, message queued');
+      logger.debug({ groupJid }, 'Agent active, message queued');
       return;
     }
 
-    if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+    if (this.activeCount >= MAX_CONCURRENT_AGENTS) {
       state.pendingMessages = true;
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
@@ -112,11 +112,11 @@ export class GroupQueue {
       if (state.idleWaiting) {
         this.closeStdin(groupJid);
       }
-      logger.debug({ groupJid, taskId }, 'Container active, task queued');
+      logger.debug({ groupJid, taskId }, 'Agent active, task queued');
       return;
     }
 
-    if (this.activeCount >= MAX_CONCURRENT_CONTAINERS) {
+    if (this.activeCount >= MAX_CONCURRENT_AGENTS) {
       state.pendingTasks.push({ id: taskId, groupJid, fn });
       if (!this.waitingGroups.includes(groupJid)) {
         this.waitingGroups.push(groupJid);
@@ -137,18 +137,18 @@ export class GroupQueue {
   registerProcess(
     groupJid: string,
     proc: ChildProcess,
-    containerName: string,
+    processName: string,
     groupFolder?: string,
   ): void {
     const state = this.getGroup(groupJid);
     state.process = proc;
-    state.containerName = containerName;
+    state.processName = processName;
     if (groupFolder) state.groupFolder = groupFolder;
   }
 
   /**
-   * Mark the container as idle-waiting (finished work, waiting for IPC input).
-   * If tasks are pending, preempt the idle container immediately.
+   * Mark the agent process as idle-waiting (finished work, waiting for IPC input).
+   * If tasks are pending, preempt the idle agent process immediately.
    */
   notifyIdle(groupJid: string): void {
     const state = this.getGroup(groupJid);
@@ -159,12 +159,12 @@ export class GroupQueue {
   }
 
   /**
-   * Send a follow-up message to the active container via IPC file.
-   * Returns true if the message was written, false if no active container.
+   * Send a follow-up message to the active agent process via IPC file.
+   * Returns true if the message was written, false if no active agent process.
    */
   sendMessage(groupJid: string, text: string): boolean {
     const state = this.getGroup(groupJid);
-    if (!state.active || !state.groupFolder || state.isTaskContainer)
+    if (!state.active || !state.groupFolder || state.isTaskProcess)
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
@@ -183,7 +183,7 @@ export class GroupQueue {
   }
 
   /**
-   * Signal the active container to wind down by writing a close sentinel.
+   * Signal the active agent process to wind down by writing a close sentinel.
    */
   closeStdin(groupJid: string): void {
     const state = this.getGroup(groupJid);
@@ -205,13 +205,13 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     state.active = true;
     state.idleWaiting = false;
-    state.isTaskContainer = false;
+    state.isTaskProcess = false;
     state.pendingMessages = false;
     this.activeCount++;
 
     logger.debug(
       { groupJid, reason, activeCount: this.activeCount },
-      'Starting container for group',
+      'Starting agent process for group',
     );
 
     try {
@@ -229,7 +229,7 @@ export class GroupQueue {
     } finally {
       state.active = false;
       state.process = null;
-      state.containerName = null;
+      state.processName = null;
       state.groupFolder = null;
       this.activeCount--;
       this.drainGroup(groupJid);
@@ -240,7 +240,7 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     state.active = true;
     state.idleWaiting = false;
-    state.isTaskContainer = true;
+    state.isTaskProcess = true;
     state.runningTaskId = task.id;
     this.activeCount++;
 
@@ -255,10 +255,10 @@ export class GroupQueue {
       logger.error({ groupJid, taskId: task.id, err }, 'Error running task');
     } finally {
       state.active = false;
-      state.isTaskContainer = false;
+      state.isTaskProcess = false;
       state.runningTaskId = null;
       state.process = null;
-      state.containerName = null;
+      state.processName = null;
       state.groupFolder = null;
       this.activeCount--;
       this.drainGroup(groupJid);
@@ -323,7 +323,7 @@ export class GroupQueue {
   private drainWaiting(): void {
     while (
       this.waitingGroups.length > 0 &&
-      this.activeCount < MAX_CONCURRENT_CONTAINERS
+      this.activeCount < MAX_CONCURRENT_AGENTS
     ) {
       const nextJid = this.waitingGroups.shift()!;
       const state = this.getGroup(nextJid);
@@ -352,19 +352,19 @@ export class GroupQueue {
   async shutdown(_gracePeriodMs: number): Promise<void> {
     this.shuttingDown = true;
 
-    // Count active containers but don't kill them — they'll finish on their own
-    // via idle timeout or container timeout. The --rm flag cleans them up on exit.
-    // This prevents WhatsApp reconnection restarts from killing working agents.
-    const activeContainers: string[] = [];
+    // Count active agent processes but don't kill them — they'll finish on their own
+    // via idle timeout or agent timeout.
+    // This prevents reconnection restarts from killing working agents.
+    const activeProcesses: string[] = [];
     for (const [jid, state] of this.groups) {
-      if (state.process && !state.process.killed && state.containerName) {
-        activeContainers.push(state.containerName);
+      if (state.process && !state.process.killed && state.processName) {
+        activeProcesses.push(state.processName);
       }
     }
 
     logger.info(
-      { activeCount: this.activeCount, detachedContainers: activeContainers },
-      'GroupQueue shutting down (containers detached, not killed)',
+      { activeCount: this.activeCount, detachedProcesses: activeProcesses },
+      'GroupQueue shutting down (agent processes detached, not killed)',
     );
   }
 }

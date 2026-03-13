@@ -4,7 +4,7 @@ export interface AdditionalMount {
   readonly?: boolean; // Default: true for safety
 }
 
-export interface ContainerConfig {
+export interface AgentConfig {
   additionalMounts?: AdditionalMount[];
   timeout?: number; // Default: 300000 (5 minutes)
   // Per-group model/effort overrides (take precedence over global env vars)
@@ -21,7 +21,7 @@ export interface RegisteredGroup {
   folder: string;
   trigger: string;
   added_at: string;
-  containerConfig?: ContainerConfig;
+  agentConfig?: AgentConfig;
   requiresTrigger?: boolean; // Default: true for groups, false for solo chats
   isMain?: boolean; // True for the main control group (no trigger, elevated privileges)
   agentType?: AgentType;

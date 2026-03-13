@@ -32,19 +32,19 @@ export const DATA_DIR = path.resolve(
   process.env.NANOCLAW_DATA_DIR || path.join(PROJECT_ROOT, 'data'),
 );
 
-export const CONTAINER_TIMEOUT = parseInt(
-  process.env.CONTAINER_TIMEOUT || '1800000',
+export const AGENT_TIMEOUT = parseInt(
+  process.env.AGENT_TIMEOUT || process.env.CONTAINER_TIMEOUT || '1800000',
   10,
 );
-export const CONTAINER_MAX_OUTPUT_SIZE = parseInt(
-  process.env.CONTAINER_MAX_OUTPUT_SIZE || '10485760',
+export const AGENT_MAX_OUTPUT_SIZE = parseInt(
+  process.env.AGENT_MAX_OUTPUT_SIZE || process.env.CONTAINER_MAX_OUTPUT_SIZE || '10485760',
   10,
 ); // 10MB default
 export const IPC_POLL_INTERVAL = 1000;
-export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep container alive after last result
-export const MAX_CONCURRENT_CONTAINERS = Math.max(
+export const IDLE_TIMEOUT = parseInt(process.env.IDLE_TIMEOUT || '1800000', 10); // 30min default — how long to keep agent alive after last result
+export const MAX_CONCURRENT_AGENTS = Math.max(
   1,
-  parseInt(process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
+  parseInt(process.env.MAX_CONCURRENT_AGENTS || process.env.MAX_CONCURRENT_CONTAINERS || '5', 10) || 5,
 );
 
 function escapeRegex(str: string): string {
