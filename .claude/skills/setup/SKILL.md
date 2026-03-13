@@ -99,6 +99,12 @@ AskUserQuestion: Do you also want to use Codex (OpenAI) agents?
 
 If yes: Tell user to add `OPENAI_API_KEY=<key>` (or `CODEX_OPENAI_API_KEY=<key>`) to `.env`. The Codex runner will use this key.
 
+### Voice Transcription (Optional)
+
+AskUserQuestion: Do you want voice message transcription in Discord/WhatsApp?
+
+If yes: Tell user to get a free API key at https://console.groq.com (no credit card needed) and add `GROQ_API_KEY=<key>` to `.env`. Uses Groq Whisper (whisper-large-v3-turbo, ~200x faster than OpenAI). Falls back to OpenAI Whisper (`OPENAI_API_KEY`) if Groq key is not set.
+
 ## 5. Install Skills Marketplace
 
 Register and install the NanoClaw skills marketplace plugin so all feature skills (channel integrations, add-ons) are available:
@@ -187,6 +193,8 @@ Tell user to test: send a message in their registered chat. Show: `tail -f logs/
 **Agent fails ("Claude Code process exited with code 1"):** Check agent logs in `groups/<folder>/logs/agent-*.log`. Common causes: missing credentials in `.env`, `codex` CLI not in PATH, stale session IDs.
 
 **Codex agent not responding:** Ensure `OPENAI_API_KEY` is set in `.env` and `codex` CLI is installed globally (`npm install -g @openai/codex`). The runner needs `codex` in PATH.
+
+**Voice transcription not working:** Check `GROQ_API_KEY` (primary) or `OPENAI_API_KEY` (fallback) is set in `.env`. Test: send a voice message in Discord and check `logs/nanoclaw.log` for `Audio transcribed` entries with `provider` and `elapsed` fields.
 
 **No response to messages:** Check trigger pattern. Main channel doesn't need prefix. Check DB: `npx tsx setup/index.ts --step verify`. Check `logs/nanoclaw.log`.
 

@@ -13,7 +13,7 @@ Two systemd services (`nanoclaw`, `nanoclaw-codex`) share the same codebase but 
 | `src/index.ts` | Orchestrator: state, message loop, agent invocation |
 | `src/agent-runner.ts` | Spawns agent processes, manages env/sessions/skills |
 | `src/token-refresh.ts` | OAuth auto-refresh + session directory sync |
-| `src/channels/discord.ts` | Discord channel (8s typing refresh) |
+| `src/channels/discord.ts` | Discord channel (8s typing refresh, Groq/OpenAI Whisper transcription) |
 | `src/ipc.ts` | IPC watcher and task processing |
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
@@ -68,3 +68,11 @@ Codex runner uses `codex app-server` JSON-RPC (not `codex exec`):
 - `turn/steer` for mid-execution message injection (IPC polling during turn)
 - `approvalPolicy: "never"` + `sandbox: "danger-full-access"` for bypass
 - Per-group: model (`CODEX_MODEL`), effort (`CODEX_EFFORT`), MCP servers via `config.toml`
+
+## Voice Transcription
+
+Audio attachments in Discord are transcribed via Groq Whisper (primary) or OpenAI Whisper (fallback):
+- `GROQ_API_KEY` — Groq `whisper-large-v3-turbo`, ~200x real-time, free tier (console.groq.com)
+- `OPENAI_API_KEY` — OpenAI `whisper-1`, fallback if Groq key not set
+- Shared file cache (`cache/transcriptions/`) deduplicates across both services
+- `.pending` file coordination prevents duplicate API calls

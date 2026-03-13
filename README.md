@@ -149,6 +149,9 @@ claude login
 
 # Codex — set API key
 export OPENAI_API_KEY=sk-...
+
+# Groq — for fast voice transcription (free at console.groq.com)
+export GROQ_API_KEY=gsk_...
 ```
 
 ### 3. Environment Variables
@@ -161,6 +164,7 @@ DISCORD_BOT_TOKEN=           # Claude Code Discord bot token
 ASSISTANT_NAME=claude        # Bot trigger name (@claude)
 ANTHROPIC_API_KEY=           # Or use OAuth (claude login)
 OPENAI_API_KEY=              # For Codex
+GROQ_API_KEY=                # For voice transcription (Groq Whisper, fast + free)
 ```
 
 For dual-service setup, create `.env.codex` for Codex-specific overrides:
