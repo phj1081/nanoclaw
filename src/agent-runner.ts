@@ -241,22 +241,37 @@ function prepareGroupEnvironment(
         fs.copyFileSync(src, dst);
       }
     }
-    // Sync skills into Codex session dir (same sources as Claude Code)
-    const codexSkillsDst = path.join(sessionCodexDir, 'skills');
-    const codexSkillSources = [
-      path.join(hostCodexDir, 'skills'),
-      path.join(projectRoot, 'container', 'skills'),
+    // Sync skills and commands into Codex session dir
+    // Sources: ~/.codex/, ~/.claude/ (shared), container/skills/
+    const codexSyncDirs = [
+      {
+        dst: path.join(sessionCodexDir, 'skills'),
+        sources: [
+          path.join(hostCodexDir, 'skills'),
+          path.join(os.homedir(), '.claude', 'skills'),
+          path.join(projectRoot, 'container', 'skills'),
+        ],
+      },
+      {
+        dst: path.join(sessionCodexDir, 'commands'),
+        sources: [
+          path.join(hostCodexDir, 'commands'),
+          path.join(os.homedir(), '.claude', 'commands'),
+        ],
+      },
     ];
-    for (const src of codexSkillSources) {
-      if (!fs.existsSync(src)) continue;
-      for (const entry of fs.readdirSync(src)) {
-        const srcPath = path.join(src, entry);
-        const dstPath = path.join(codexSkillsDst, entry);
-        if (fs.statSync(srcPath).isDirectory()) {
-          fs.cpSync(srcPath, dstPath, { recursive: true });
-        } else {
-          fs.mkdirSync(codexSkillsDst, { recursive: true });
-          fs.copyFileSync(srcPath, dstPath);
+    for (const { dst, sources } of codexSyncDirs) {
+      for (const src of sources) {
+        if (!fs.existsSync(src)) continue;
+        for (const entry of fs.readdirSync(src)) {
+          const srcPath = path.join(src, entry);
+          const dstPath = path.join(dst, entry);
+          if (fs.statSync(srcPath).isDirectory()) {
+            fs.cpSync(srcPath, dstPath, { recursive: true });
+          } else {
+            fs.mkdirSync(dst, { recursive: true });
+            fs.copyFileSync(srcPath, dstPath);
+          }
         }
       }
     }
