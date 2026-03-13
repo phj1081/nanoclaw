@@ -48,9 +48,13 @@ interface SessionsIndex {
   entries: SessionEntry[];
 }
 
+type ContentBlock =
+  | { type: 'text'; text: string }
+  | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } };
+
 interface SDKUserMessage {
   type: 'user';
-  message: { role: 'user'; content: string };
+  message: { role: 'user'; content: string | ContentBlock[] };
   parent_tool_use_id: null;
   session_id: string;
 }
@@ -68,6 +72,51 @@ const MAX_TURNS = 100;
 const IPC_INPUT_CLOSE_SENTINEL = path.join(IPC_INPUT_DIR, '_close');
 const IPC_POLL_MS = 500;
 
+const IMAGE_TAG_RE = /\[Image:\s*(\/[^\]]+)\]/g;
+const MIME_TYPES: Record<string, string> = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+};
+
+/**
+ * Parse [Image: /absolute/path] tags from text and build multimodal content.
+ * Returns a plain string if no images found, or ContentBlock[] with text + image blocks.
+ */
+function buildMultimodalContent(text: string): string | ContentBlock[] {
+  const imagePaths: string[] = [];
+  let match;
+  while ((match = IMAGE_TAG_RE.exec(text)) !== null) {
+    imagePaths.push(match[1].trim());
+  }
+  IMAGE_TAG_RE.lastIndex = 0; // reset regex state
+
+  if (imagePaths.length === 0) return text;
+
+  const blocks: ContentBlock[] = [];
+  const cleanText = text.replace(IMAGE_TAG_RE, '').trim();
+  if (cleanText) {
+    blocks.push({ type: 'text', text: cleanText });
+  }
+
+  for (const imgPath of imagePaths) {
+    try {
+      if (!fs.existsSync(imgPath)) {
+        log(`Image not found, skipping: ${imgPath}`);
+        continue;
+      }
+      const data = fs.readFileSync(imgPath).toString('base64');
+      const ext = path.extname(imgPath).toLowerCase();
+      const mediaType = MIME_TYPES[ext] || 'image/png';
+      blocks.push({ type: 'image', source: { type: 'base64', media_type: mediaType, data } });
+      log(`Added image block: ${imgPath} (${mediaType})`);
+    } catch (err) {
+      log(`Failed to read image ${imgPath}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  return blocks.length > 0 ? blocks : text;
+}
+
 /**
  * Push-based async iterable for streaming user messages to the SDK.
  * Keeps the iterable alive until end() is called, preventing isSingleUserTurn.
@@ -78,9 +127,10 @@ class MessageStream {
   private done = false;
 
   push(text: string): void {
+    const content = buildMultimodalContent(text);
     this.queue.push({
       type: 'user',
-      message: { role: 'user', content: text },
+      message: { role: 'user', content },
       parent_tool_use_id: null,
       session_id: '',
     });

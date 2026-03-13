@@ -325,9 +325,35 @@ class CodexAppServer {
   }
 
   async startTurn(threadId: string, text: string): Promise<string> {
+    // Parse [Image: /absolute/path] patterns and convert to multimodal input
+    const imagePattern = /\[Image:\s*(\/[^\]]+)\]/g;
+    const input: Array<Record<string, unknown>> = [];
+    const imagePaths: string[] = [];
+    let match;
+    while ((match = imagePattern.exec(text)) !== null) {
+      imagePaths.push(match[1].trim());
+    }
+    // Add text (with image tags stripped) as first input block
+    const cleanText = text.replace(imagePattern, '').trim();
+    if (cleanText) {
+      input.push({ type: 'text', text: cleanText, text_elements: [] });
+    }
+    // Add image input blocks
+    for (const imgPath of imagePaths) {
+      if (fs.existsSync(imgPath)) {
+        input.push({ type: 'localImage', path: imgPath });
+        log(`Adding image input: ${imgPath}`);
+      } else {
+        log(`Image not found, skipping: ${imgPath}`);
+      }
+    }
+    if (input.length === 0) {
+      input.push({ type: 'text', text, text_elements: [] });
+    }
+
     const params: Record<string, unknown> = {
       threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
+      input,
     };
     if (CODEX_EFFORT) params.effort = CODEX_EFFORT;
 

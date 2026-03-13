@@ -1,3 +1,6 @@
+import fs from 'fs';
+import path from 'path';
+
 import {
   Attachment,
   Client,
@@ -7,9 +10,29 @@ import {
   TextChannel,
 } from 'discord.js';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, DATA_DIR, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
+
+const ATTACHMENTS_DIR = path.join(DATA_DIR, 'attachments');
+
+/**
+ * Download a Discord image attachment to local disk.
+ * Returns the absolute path to the saved file.
+ */
+async function downloadImage(att: Attachment): Promise<string> {
+  const res = await fetch(att.url);
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+
+  fs.mkdirSync(ATTACHMENTS_DIR, { recursive: true });
+  const ext = path.extname(att.name || 'image.png') || '.png';
+  const filename = `${Date.now()}-${att.id}${ext}`;
+  const filePath = path.join(ATTACHMENTS_DIR, filename);
+  fs.writeFileSync(filePath, buffer);
+  logger.info({ file: filename, size: buffer.length }, 'Image downloaded');
+  return filePath;
+}
 
 /**
  * Transcribe an audio attachment via OpenAI Whisper API.
@@ -158,7 +181,13 @@ export class DiscordChannel implements Channel {
             if (contentType.startsWith('audio/') && openaiKey) {
               return transcribeAudio(att, openaiKey);
             } else if (contentType.startsWith('image/')) {
-              return `[Image: ${att.name || 'image'}]`;
+              try {
+                const imgPath = await downloadImage(att);
+                return `[Image: ${imgPath}]`;
+              } catch (err) {
+                logger.error({ err, file: att.name }, 'Image download failed');
+                return `[Image: ${att.name || 'image'} (download failed)]`;
+              }
             } else if (contentType.startsWith('video/')) {
               return `[Video: ${att.name || 'video'}]`;
             } else if (contentType.startsWith('audio/')) {
