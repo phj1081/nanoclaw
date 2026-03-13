@@ -74,6 +74,9 @@ export interface Channel {
   disconnect(): Promise<void>;
   // Optional: typing indicator. Channels that support it implement it.
   setTyping?(jid: string, isTyping: boolean): Promise<void>;
+  // Optional: edit/delete messages (used by status dashboard).
+  editMessage?(jid: string, messageId: string, text: string): Promise<void>;
+  sendAndTrack?(jid: string, text: string): Promise<string | null>;
   // Optional: sync group/chat names from the platform.
   syncGroups?(force: boolean): Promise<void>;
 }

@@ -423,6 +423,37 @@ export class DiscordChannel implements Channel {
     await sendOnce();
     this.typingIntervals.set(jid, setInterval(sendOnce, 8000));
   }
+
+  async sendAndTrack(jid: string, text: string): Promise<string | null> {
+    if (!this.client) return null;
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('send' in channel)) return null;
+      const msg = await (channel as TextChannel).send(text);
+      return msg.id;
+    } catch (err) {
+      logger.error({ jid, err }, 'Failed to send tracked Discord message');
+      return null;
+    }
+  }
+
+  async editMessage(
+    jid: string,
+    messageId: string,
+    text: string,
+  ): Promise<void> {
+    if (!this.client) return;
+    try {
+      const channelId = jid.replace(/^dc:/, '');
+      const channel = await this.client.channels.fetch(channelId);
+      if (!channel || !('messages' in channel)) return;
+      const msg = await (channel as TextChannel).messages.fetch(messageId);
+      await msg.edit(text);
+    } catch (err) {
+      logger.debug({ jid, messageId, err }, 'Failed to edit Discord message');
+    }
+  }
 }
 
 registerChannel('discord', (opts: ChannelOpts) => {

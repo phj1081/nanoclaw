@@ -25,6 +25,15 @@ interface GroupState {
   processName: string | null;
   groupFolder: string | null;
   retryCount: number;
+  startedAt: number | null;
+}
+
+export interface GroupStatus {
+  jid: string;
+  status: 'processing' | 'idle' | 'waiting' | 'inactive';
+  elapsedMs: number | null;
+  pendingMessages: boolean;
+  pendingTasks: number;
 }
 
 export class GroupQueue {
@@ -49,6 +58,7 @@ export class GroupQueue {
         processName: null,
         groupFolder: null,
         retryCount: 0,
+        startedAt: null,
       };
       this.groups.set(groupJid, state);
     }
@@ -207,6 +217,7 @@ export class GroupQueue {
     state.idleWaiting = false;
     state.isTaskProcess = false;
     state.pendingMessages = false;
+    state.startedAt = Date.now();
     this.activeCount++;
 
     logger.debug(
@@ -228,6 +239,7 @@ export class GroupQueue {
       this.scheduleRetry(groupJid, state);
     } finally {
       state.active = false;
+      state.startedAt = null;
       state.process = null;
       state.processName = null;
       state.groupFolder = null;
@@ -242,6 +254,7 @@ export class GroupQueue {
     state.idleWaiting = false;
     state.isTaskProcess = true;
     state.runningTaskId = task.id;
+    state.startedAt = Date.now();
     this.activeCount++;
 
     logger.debug(
@@ -257,6 +270,7 @@ export class GroupQueue {
       state.active = false;
       state.isTaskProcess = false;
       state.runningTaskId = null;
+      state.startedAt = null;
       state.process = null;
       state.processName = null;
       state.groupFolder = null;
@@ -347,6 +361,48 @@ export class GroupQueue {
       }
       // If neither pending, skip this group
     }
+  }
+
+  /**
+   * Return current status of all known groups.
+   * Only includes groups that have been seen (registered or had activity).
+   */
+  getStatuses(registeredJids?: string[]): GroupStatus[] {
+    const jids = registeredJids ?? [...this.groups.keys()];
+    const now = Date.now();
+    return jids.map((jid) => {
+      const state = this.groups.get(jid);
+      if (!state) {
+        return {
+          jid,
+          status: 'inactive' as const,
+          elapsedMs: null,
+          pendingMessages: false,
+          pendingTasks: 0,
+        };
+      }
+      let status: GroupStatus['status'];
+      if (state.active && !state.idleWaiting) {
+        status = 'processing';
+      } else if (state.active && state.idleWaiting) {
+        status = 'idle';
+      } else if (
+        state.pendingMessages ||
+        state.pendingTasks.length > 0 ||
+        this.waitingGroups.includes(jid)
+      ) {
+        status = 'waiting';
+      } else {
+        status = 'inactive';
+      }
+      return {
+        jid,
+        status,
+        elapsedMs: state.startedAt ? now - state.startedAt : null,
+        pendingMessages: state.pendingMessages,
+        pendingTasks: state.pendingTasks.length,
+      };
+    });
   }
 
   async shutdown(_gracePeriodMs: number): Promise<void> {

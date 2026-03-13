@@ -5,6 +5,8 @@ import {
   ASSISTANT_NAME,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
+  STATUS_CHANNEL_ID,
+  STATUS_UPDATE_INTERVAL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
@@ -381,6 +383,83 @@ async function runAgent(
   }
 }
 
+// ── Status Dashboard ────────────────────────────────────────────
+
+function formatElapsed(ms: number): string {
+  const s = Math.floor(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return `${m}m${rem.toString().padStart(2, '0')}s`;
+}
+
+const STATUS_ICONS: Record<string, string> = {
+  processing: '🟡',
+  idle: '🟢',
+  waiting: '🔵',
+  inactive: '⚪',
+};
+
+let statusMessageId: string | null = null;
+
+function buildStatusContent(): string {
+  const jids = Object.keys(registeredGroups);
+  const statuses = queue.getStatuses(jids);
+
+  const lines = statuses.map((s) => {
+    const group = registeredGroups[s.jid];
+    const name = group?.name || s.jid;
+    const icon = STATUS_ICONS[s.status] || '⚪';
+    const label =
+      s.status === 'processing'
+        ? `처리 중 (${formatElapsed(s.elapsedMs || 0)})`
+        : s.status === 'idle'
+          ? '대기 중'
+          : s.status === 'waiting'
+            ? `큐 대기 (${s.pendingTasks > 0 ? `태스크 ${s.pendingTasks}개` : '메시지'})`
+            : '비활성';
+    return `${icon} **${name}** — ${label}`;
+  });
+
+  const active = statuses.filter((s) => s.status === 'processing').length;
+  const idle = statuses.filter((s) => s.status === 'idle').length;
+  const header = `**에이전트 상태** (${ASSISTANT_NAME}) — 활성 ${active} | 대기 ${idle} | 전체 ${statuses.length}`;
+  return `${header}\n\n${lines.join('\n')}\n\n_${new Date().toLocaleTimeString('ko-KR')}_`;
+}
+
+async function startStatusDashboard(): Promise<void> {
+  if (!STATUS_CHANNEL_ID) return;
+
+  const statusJid = `dc:${STATUS_CHANNEL_ID}`;
+
+  const findDiscordChannel = () =>
+    channels.find((c) => c.name.startsWith('discord') && c.isConnected());
+
+  const updateStatus = async () => {
+    const ch = findDiscordChannel();
+    if (!ch) return;
+
+    try {
+      const content = buildStatusContent();
+
+      if (statusMessageId && ch.editMessage) {
+        await ch.editMessage(statusJid, statusMessageId, content);
+      } else if (ch.sendAndTrack) {
+        const id = await ch.sendAndTrack(statusJid, content);
+        if (id) statusMessageId = id;
+      }
+    } catch (err) {
+      logger.debug({ err }, 'Status dashboard update failed');
+      statusMessageId = null; // Reset on error, will re-create next tick
+    }
+  };
+
+  setInterval(updateStatus, STATUS_UPDATE_INTERVAL);
+  // Initial send
+  await updateStatus();
+  logger.info({ channelId: STATUS_CHANNEL_ID }, 'Status dashboard started');
+}
+
 async function startMessageLoop(): Promise<void> {
   if (messageLoopRunning) {
     logger.debug('Message loop already running, skipping duplicate start');
@@ -658,6 +737,7 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+  await startStatusDashboard();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);
