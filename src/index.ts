@@ -235,10 +235,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   const resetIdleTimer = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => {
-      logger.debug(
-        { group: group.name },
-        'Idle timeout, closing agent stdin',
-      );
+      logger.debug({ group: group.name }, 'Idle timeout, closing agent stdin');
       queue.closeStdin(chatJid);
     }, IDLE_TIMEOUT);
   };

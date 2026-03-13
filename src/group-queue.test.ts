@@ -298,12 +298,7 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     // Register a process so closeStdin has a groupFolder
-    queue.registerProcess(
-      'group1@g.us',
-      {} as any,
-      'agent-1',
-      'test-group',
-    );
+    queue.registerProcess('group1@g.us', {} as any, 'agent-1', 'test-group');
 
     // Enqueue a task while agent is active but NOT idle
     const taskFn = vi.fn(async () => {});
@@ -338,12 +333,7 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     // Register process and mark idle
-    queue.registerProcess(
-      'group1@g.us',
-      {} as any,
-      'agent-1',
-      'test-group',
-    );
+    queue.registerProcess('group1@g.us', {} as any, 'agent-1', 'test-group');
     queue.notifyIdle('group1@g.us');
 
     // Clear previous writes, then enqueue a task
@@ -377,12 +367,7 @@ describe('GroupQueue', () => {
     queue.setProcessMessagesFn(processMessages);
     queue.enqueueMessageCheck('group1@g.us');
     await vi.advanceTimersByTimeAsync(10);
-    queue.registerProcess(
-      'group1@g.us',
-      {} as any,
-      'agent-1',
-      'test-group',
-    );
+    queue.registerProcess('group1@g.us', {} as any, 'agent-1', 'test-group');
 
     // Agent becomes idle
     queue.notifyIdle('group1@g.us');
@@ -418,12 +403,7 @@ describe('GroupQueue', () => {
     // Start a task (sets isTaskProcess = true)
     queue.enqueueTask('group1@g.us', 'task-1', taskFn);
     await vi.advanceTimersByTimeAsync(10);
-    queue.registerProcess(
-      'group1@g.us',
-      {} as any,
-      'agent-1',
-      'test-group',
-    );
+    queue.registerProcess('group1@g.us', {} as any, 'agent-1', 'test-group');
 
     // sendMessage should return false — user messages must not go to task agents
     const result = queue.sendMessage('group1@g.us', 'hello');
@@ -451,12 +431,7 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
 
     // Register process and enqueue a task (no idle yet — no preemption)
-    queue.registerProcess(
-      'group1@g.us',
-      {} as any,
-      'agent-1',
-      'test-group',
-    );
+    queue.registerProcess('group1@g.us', {} as any, 'agent-1', 'test-group');
 
     const writeFileSync = vi.mocked(fs.default.writeFileSync);
     writeFileSync.mockClear();

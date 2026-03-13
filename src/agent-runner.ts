@@ -88,40 +88,27 @@ function prepareGroupEnvironment(
     );
   }
 
-  // Sync skills and commands into each group's .claude/ session dir
-  // Sources: 1) user's global ~/.claude/  2) project workDir/.claude/  3) container/skills/
+  // Sync skills into each group's .claude/ session dir
+  // Sources: 1) user's global ~/.claude/skills  2) project workDir/.claude/skills  3) container/skills/
   const workDirClaude = group.workDir
     ? path.join(group.workDir, '.claude')
     : null;
-  const syncDirs = [
-    {
-      dst: path.join(groupSessionsDir, 'skills'),
-      sources: [
-        path.join(os.homedir(), '.claude', 'skills'),
-        ...(workDirClaude ? [path.join(workDirClaude, 'skills')] : []),
-        path.join(projectRoot, 'container', 'skills'),
-      ],
-    },
-    {
-      dst: path.join(groupSessionsDir, 'commands'),
-      sources: [
-        path.join(os.homedir(), '.claude', 'commands'),
-        ...(workDirClaude ? [path.join(workDirClaude, 'commands')] : []),
-      ],
-    },
+  const skillSources = [
+    path.join(os.homedir(), '.claude', 'skills'),
+    ...(workDirClaude ? [path.join(workDirClaude, 'skills')] : []),
+    path.join(projectRoot, 'container', 'skills'),
   ];
-  for (const { dst, sources } of syncDirs) {
-    for (const src of sources) {
-      if (!fs.existsSync(src)) continue;
-      for (const entry of fs.readdirSync(src)) {
-        const srcPath = path.join(src, entry);
-        const dstPath = path.join(dst, entry);
-        if (fs.statSync(srcPath).isDirectory()) {
-          fs.cpSync(srcPath, dstPath, { recursive: true });
-        } else {
-          fs.mkdirSync(dst, { recursive: true });
-          fs.copyFileSync(srcPath, dstPath);
-        }
+  const skillsDst = path.join(groupSessionsDir, 'skills');
+  for (const src of skillSources) {
+    if (!fs.existsSync(src)) continue;
+    for (const entry of fs.readdirSync(src)) {
+      const srcPath = path.join(src, entry);
+      const dstPath = path.join(skillsDst, entry);
+      if (fs.statSync(srcPath).isDirectory()) {
+        fs.cpSync(srcPath, dstPath, { recursive: true });
+      } else {
+        fs.mkdirSync(skillsDst, { recursive: true });
+        fs.copyFileSync(srcPath, dstPath);
       }
     }
   }
@@ -241,37 +228,23 @@ function prepareGroupEnvironment(
         fs.copyFileSync(src, dst);
       }
     }
-    // Sync skills and commands into Codex session dir
-    // Sources: ~/.codex/, ~/.claude/ (shared), container/skills/
-    const codexSyncDirs = [
-      {
-        dst: path.join(sessionCodexDir, 'skills'),
-        sources: [
-          path.join(hostCodexDir, 'skills'),
-          path.join(os.homedir(), '.claude', 'skills'),
-          path.join(projectRoot, 'container', 'skills'),
-        ],
-      },
-      {
-        dst: path.join(sessionCodexDir, 'commands'),
-        sources: [
-          path.join(hostCodexDir, 'commands'),
-          path.join(os.homedir(), '.claude', 'commands'),
-        ],
-      },
+    // Sync skills into Codex session dir
+    // SSOT: ~/.claude/skills/ (shared with Claude Code) + container/skills/
+    const codexSkillSources = [
+      path.join(os.homedir(), '.claude', 'skills'),
+      path.join(projectRoot, 'container', 'skills'),
     ];
-    for (const { dst, sources } of codexSyncDirs) {
-      for (const src of sources) {
-        if (!fs.existsSync(src)) continue;
-        for (const entry of fs.readdirSync(src)) {
-          const srcPath = path.join(src, entry);
-          const dstPath = path.join(dst, entry);
-          if (fs.statSync(srcPath).isDirectory()) {
-            fs.cpSync(srcPath, dstPath, { recursive: true });
-          } else {
-            fs.mkdirSync(dst, { recursive: true });
-            fs.copyFileSync(srcPath, dstPath);
-          }
+    const codexSkillsDst = path.join(sessionCodexDir, 'skills');
+    for (const src of codexSkillSources) {
+      if (!fs.existsSync(src)) continue;
+      for (const entry of fs.readdirSync(src)) {
+        const srcPath = path.join(src, entry);
+        const dstPath = path.join(codexSkillsDst, entry);
+        if (fs.statSync(srcPath).isDirectory()) {
+          fs.cpSync(srcPath, dstPath, { recursive: true });
+        } else {
+          fs.mkdirSync(codexSkillsDst, { recursive: true });
+          fs.copyFileSync(srcPath, dstPath);
         }
       }
     }
