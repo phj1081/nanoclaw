@@ -13,6 +13,7 @@ import path from 'path';
 
 import { logger } from './logger.js';
 import { DATA_DIR } from './config.js';
+import { readEnvFile } from './env.js';
 
 const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token';
 const FALLBACK_TOKEN_URL = 'https://api.anthropic.com/v1/oauth/token';
@@ -213,6 +214,18 @@ async function checkAndRefresh(): Promise<void> {
 let refreshInterval: ReturnType<typeof setInterval> | null = null;
 
 export function startTokenRefreshLoop(): void {
+  // Skip if using env-based auth (API key or long-lived setup-token)
+  const envVars = readEnvFile(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN']);
+  if (
+    envVars.ANTHROPIC_API_KEY ||
+    process.env.ANTHROPIC_API_KEY ||
+    envVars.CLAUDE_CODE_OAUTH_TOKEN ||
+    process.env.CLAUDE_CODE_OAUTH_TOKEN
+  ) {
+    logger.info('Using env-based auth, token auto-refresh disabled');
+    return;
+  }
+
   // Only run if credentials file exists (skip for API key-only setups)
   const creds = readCredentials();
   if (!creds?.claudeAiOauth) {
