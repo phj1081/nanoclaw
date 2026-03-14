@@ -8,7 +8,9 @@
     "build": "tsc",
     "start": "node dist/index.js"
   },
-  "dependencies": {},
+  "dependencies": {
+    "@openai/codex-sdk": "^0.114.0"
+  },
   "devDependencies": {
     "@types/node": "^22.10.7",
     "typescript": "^5.7.3"

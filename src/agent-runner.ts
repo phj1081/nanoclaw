@@ -214,7 +214,7 @@ function prepareGroupEnvironment(
     const authSrc = path.join(hostCodexDir, 'auth.json');
     const authDst = path.join(sessionCodexDir, 'auth.json');
     if (fs.existsSync(authSrc)) fs.copyFileSync(authSrc, authDst);
-    for (const file of ['config.toml', 'config.json', 'instructions.md']) {
+    for (const file of ['config.toml', 'config.json', 'AGENTS.md']) {
       const src = path.join(hostCodexDir, file);
       const dst = path.join(sessionCodexDir, file);
       if (fs.existsSync(src)) {

@@ -1,9 +1,9 @@
 /**
- * NanoClaw Codex Runner (app-server mode)
+ * NanoClaw Codex Runner (SDK mode)
  *
- * Spawns a single `codex app-server` process and communicates via JSON-RPC
- * over stdio. Supports streaming responses, session persistence (threadId),
- * and mid-turn message injection via turn/steer.
+ * Uses @openai/codex-sdk which wraps `codex exec`. This ensures complete
+ * task execution per turn — the agent finishes all work before responding,
+ * unlike app-server mode which can end turns prematurely.
  *
  * Input protocol:
  *   Stdin: Full ContainerInput JSON (read until EOF)
@@ -14,10 +14,9 @@
  *   Each result is wrapped in OUTPUT_START_MARKER / OUTPUT_END_MARKER pairs.
  */
 
-import { spawn, ChildProcess } from 'child_process';
+import { Codex, type Thread, type UserInput, type ThreadOptions } from '@openai/codex-sdk';
 import fs from 'fs';
 import path from 'path';
-import readline from 'readline';
 
 // ── Types ──────────────────────────────────────────────────────────
 
@@ -37,20 +36,6 @@ interface ContainerOutput {
   result: string | null;
   newSessionId?: string;
   error?: string;
-}
-
-interface JsonRpcRequest {
-  method: string;
-  id?: number;
-  params?: Record<string, unknown>;
-}
-
-interface JsonRpcResponse {
-  id?: number;
-  method?: string;
-  result?: Record<string, unknown>;
-  error?: { code: number; message: string };
-  params?: Record<string, unknown>;
 }
 
 // ── Constants ──────────────────────────────────────────────────────
@@ -146,412 +131,74 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
-// ── App-Server Client ──────────────────────────────────────────────
-
-class CodexAppServer {
-  private proc: ChildProcess;
-  private rl: readline.Interface;
-  private nextId = 1;
-  private pending = new Map<number, {
-    resolve: (value: JsonRpcResponse) => void;
-    reject: (err: Error) => void;
-  }>();
-  private notificationHandler: ((msg: JsonRpcResponse) => void) | null = null;
-  private serverRequestHandler: ((msg: JsonRpcResponse) => void) | null = null;
-
-  constructor() {
-    this.proc = spawn('codex', ['app-server'], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-      cwd: EFFECTIVE_CWD,
-      env: { ...process.env },
-    });
-
-    this.rl = readline.createInterface({ input: this.proc.stdout! });
-
-    this.rl.on('line', (line: string) => {
-      if (!line.trim()) return;
-      try {
-        const msg: JsonRpcResponse = JSON.parse(line);
-        this.handleMessage(msg);
-      } catch {
-        // Non-JSON output, ignore
-      }
-    });
-
-    this.proc.stderr?.on('data', (data: Buffer) => {
-      for (const line of data.toString().trim().split('\n')) {
-        if (line) log(line);
-      }
-    });
-
-    this.proc.on('error', (err: Error) => {
-      log(`App-server spawn error: ${err.message}`);
-      // Reject all pending requests
-      for (const [, { reject }] of this.pending) {
-        reject(err);
-      }
-      this.pending.clear();
-    });
-
-    this.proc.on('close', (code: number | null) => {
-      log(`App-server exited with code ${code}`);
-      const err = new Error(`App-server exited with code ${code}`);
-      for (const [, { reject }] of this.pending) {
-        reject(err);
-      }
-      this.pending.clear();
-    });
-  }
-
-  private handleMessage(msg: JsonRpcResponse): void {
-    // Response to a request we made
-    if (msg.id !== undefined && this.pending.has(msg.id)) {
-      const handler = this.pending.get(msg.id)!;
-      this.pending.delete(msg.id);
-      handler.resolve(msg);
-      return;
-    }
-
-    // Server-initiated request (has id + method) — needs a response
-    if (msg.id !== undefined && msg.method) {
-      this.serverRequestHandler?.(msg);
-      return;
-    }
-
-    // Notification (has method, no id)
-    if (msg.method) {
-      this.notificationHandler?.(msg);
-    }
-  }
-
-  setNotificationHandler(handler: ((msg: JsonRpcResponse) => void) | null): void {
-    this.notificationHandler = handler;
-  }
-
-  setServerRequestHandler(handler: ((msg: JsonRpcResponse) => void) | null): void {
-    this.serverRequestHandler = handler;
-  }
-
-  send(msg: JsonRpcRequest): void {
-    this.proc.stdin!.write(JSON.stringify(msg) + '\n');
-  }
-
-  async request(method: string, params: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<JsonRpcResponse> {
-    const id = this.nextId++;
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Request ${method} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      this.pending.set(id, {
-        resolve: (resp) => {
-          clearTimeout(timer);
-          resolve(resp);
-        },
-        reject: (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-      });
-
-      this.send({ method, id, params });
-    });
-  }
-
-  respond(id: number, result: Record<string, unknown>): void {
-    this.proc.stdin!.write(JSON.stringify({ id, result }) + '\n');
-  }
-
-  async initialize(): Promise<void> {
-    const resp = await this.request('initialize', {
-      clientInfo: { name: 'nanoclaw', title: 'NanoClaw Codex', version: '1.0' },
-      capabilities: { experimentalApi: false },
-    }, 15_000);
-
-    if (resp.error) {
-      throw new Error(`Initialize failed: ${resp.error.message}`);
-    }
-
-    // Send initialized notification
-    this.send({ method: 'initialized' });
-    log('App-server initialized');
-  }
-
-  async startThread(): Promise<string> {
-    const params: Record<string, unknown> = {
-      cwd: EFFECTIVE_CWD,
-      approvalPolicy: 'never',
-      sandbox: 'danger-full-access',
-      experimentalRawEvents: false,
-      persistExtendedHistory: false,
-    };
-    if (CODEX_MODEL) params.model = CODEX_MODEL;
-
-    const resp = await this.request('thread/start', params, 30_000);
-    if (resp.error) {
-      throw new Error(`thread/start failed: ${resp.error.message}`);
-    }
-
-    const thread = resp.result?.thread as Record<string, unknown> | undefined;
-    const threadId = thread?.id as string;
-    log(`Thread started: ${threadId}`);
-    return threadId;
-  }
-
-  async resumeThread(threadId: string): Promise<string> {
-    const params: Record<string, unknown> = {
-      threadId,
-      cwd: EFFECTIVE_CWD,
-      approvalPolicy: 'never',
-      sandbox: 'danger-full-access',
-      persistExtendedHistory: false,
-    };
-    if (CODEX_MODEL) params.model = CODEX_MODEL;
-
-    const resp = await this.request('thread/resume', params, 30_000);
-    if (resp.error) {
-      // If resume fails (e.g., thread not found), start a new one
-      log(`thread/resume failed: ${resp.error.message}, starting new thread`);
-      return this.startThread();
-    }
-
-    const thread = resp.result?.thread as Record<string, unknown> | undefined;
-    const actualId = (thread?.id as string) || threadId;
-    log(`Thread resumed: ${actualId}`);
-    return actualId;
-  }
-
-  async startTurn(threadId: string, text: string): Promise<string> {
-    // Parse [Image: /absolute/path] patterns and convert to multimodal input
-    const imagePattern = /\[Image:\s*(\/[^\]]+)\]/g;
-    const input: Array<Record<string, unknown>> = [];
-    const imagePaths: string[] = [];
-    let match;
-    while ((match = imagePattern.exec(text)) !== null) {
-      imagePaths.push(match[1].trim());
-    }
-    // Add text (with image tags stripped) as first input block
-    const cleanText = text.replace(imagePattern, '').trim();
-    if (cleanText) {
-      input.push({ type: 'text', text: cleanText, text_elements: [] });
-    }
-    // Add image input blocks
-    for (const imgPath of imagePaths) {
-      if (fs.existsSync(imgPath)) {
-        input.push({ type: 'localImage', path: imgPath });
-        log(`Adding image input: ${imgPath}`);
-      } else {
-        log(`Image not found, skipping: ${imgPath}`);
-      }
-    }
-    if (input.length === 0) {
-      input.push({ type: 'text', text, text_elements: [] });
-    }
-
-    const params: Record<string, unknown> = {
-      threadId,
-      input,
-    };
-    if (CODEX_EFFORT) params.effort = CODEX_EFFORT;
-
-    const resp = await this.request('turn/start', params, 30_000);
-    if (resp.error) {
-      throw new Error(`turn/start failed: ${resp.error.message}`);
-    }
-
-    const turn = resp.result?.turn as Record<string, unknown> | undefined;
-    const turnId = turn?.id as string;
-    log(`Turn started: ${turnId}`);
-    return turnId;
-  }
-
-  async steerTurn(threadId: string, turnId: string, text: string): Promise<void> {
-    const resp = await this.request('turn/steer', {
-      threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
-      expectedTurnId: turnId,
-    }, 10_000);
-
-    if (resp.error) {
-      log(`turn/steer failed: ${resp.error.message}`);
-    }
-  }
-
-  async interruptTurn(threadId: string, turnId: string): Promise<void> {
-    try {
-      await this.request('turn/interrupt', { threadId, turnId }, 10_000);
-    } catch (err) {
-      log(`turn/interrupt failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  }
-
-  kill(): void {
-    try {
-      this.proc.kill('SIGTERM');
-      setTimeout(() => {
-        if (!this.proc.killed) this.proc.kill('SIGKILL');
-      }, 5000);
-    } catch { /* ignore */ }
-  }
-
-  get alive(): boolean {
-    return !this.proc.killed && this.proc.exitCode === null;
-  }
-}
-
-// ── Turn Execution ─────────────────────────────────────────────────
+// ── Input Parsing ─────────────────────────────────────────────────
 
 /**
- * Execute a turn and collect the agent's text response.
- * While the turn is running, polls IPC for new messages and injects
- * them via turn/steer (mid-execution message injection).
- * Returns when turn/completed notification is received.
+ * Parse [Image: /path] patterns from text and build SDK input.
  */
-async function executeTurn(
-  server: CodexAppServer,
-  threadId: string,
-  prompt: string,
-): Promise<{ result: string; error?: string; turnId: string }> {
-  return new Promise((resolve) => {
-    let agentText = '';
-    let turnId = '';
-    let resolved = false;
-    let ipcPollTimer: ReturnType<typeof setTimeout> | null = null;
+function parseInput(text: string): string | UserInput[] {
+  const imagePattern = /\[Image:\s*(\/[^\]]+)\]/g;
+  const imagePaths: string[] = [];
+  let match;
+  while ((match = imagePattern.exec(text)) !== null) {
+    imagePaths.push(match[1].trim());
+  }
 
-    const cleanup = () => {
-      server.setNotificationHandler(null);
-      server.setServerRequestHandler(null);
-      if (ipcPollTimer) {
-        clearTimeout(ipcPollTimer);
-        ipcPollTimer = null;
-      }
-    };
+  if (imagePaths.length === 0) return text;
 
-    // Timeout safety (5 minutes per turn)
-    const timer = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        cleanup();
-        log('Turn execution timed out (5min)');
-        resolve({
-          result: agentText || '',
-          error: 'Turn timed out after 5 minutes',
-          turnId,
-        });
-      }
-    }, 5 * 60 * 1000);
-
-    // IPC polling during turn — steer messages into the running turn
-    const pollIpcDuringTurn = () => {
-      if (resolved) return;
-
-      // Check close sentinel
-      if (shouldClose()) {
-        log('Close sentinel during turn, interrupting');
-        if (turnId) {
-          server.interruptTurn(threadId, turnId).catch(() => {});
-        }
-        return;
-      }
-
-      // Check for new messages to steer
-      const messages = drainIpcInput();
-      if (messages.length > 0 && turnId) {
-        const text = messages.join('\n');
-        log(`Steering message into turn (${text.length} chars)`);
-        server.steerTurn(threadId, turnId, text).catch((err) => {
-          log(`Steer failed: ${err instanceof Error ? err.message : String(err)}`);
-        });
-      }
-
-      ipcPollTimer = setTimeout(pollIpcDuringTurn, IPC_POLL_MS);
-    };
-
-    // Handle notifications (streaming events)
-    server.setNotificationHandler((msg) => {
-      if (resolved) return;
-
-      switch (msg.method) {
-        case 'item/agentMessage/delta': {
-          const delta = (msg.params as Record<string, unknown>)?.delta as string;
-          if (delta) agentText += delta;
-          break;
-        }
-
-        case 'item/completed': {
-          const item = (msg.params as Record<string, unknown>)?.item as Record<string, unknown>;
-          if (item?.type === 'agentMessage') {
-            // Use authoritative text from completed item
-            const text = item.text as string;
-            if (text) agentText = text;
-          }
-          break;
-        }
-
-        case 'turn/completed': {
-          const turn = (msg.params as Record<string, unknown>)?.turn as Record<string, unknown>;
-          const status = turn?.status as string;
-          const error = turn?.error as Record<string, unknown> | null;
-
-          clearTimeout(timer);
-          resolved = true;
-          cleanup();
-
-          if (status === 'failed') {
-            const errMsg = (error?.message as string) || 'Turn failed';
-            resolve({ result: agentText || '', error: errMsg, turnId });
-          } else {
-            resolve({ result: agentText, turnId });
-          }
-          break;
-        }
-
-        case 'turn/started': {
-          const turn = (msg.params as Record<string, unknown>)?.turn as Record<string, unknown>;
-          if (turn?.id) turnId = turn.id as string;
-          break;
-        }
-      }
-    });
-
-    // Handle server requests (approval auto-accept)
-    server.setServerRequestHandler((msg) => {
-      if (msg.id === undefined) return;
-
-      if (msg.method === 'item/commandExecution/requestApproval' ||
-          msg.method === 'item/fileChange/requestApproval' ||
-          msg.method === 'item/permissions/requestApproval') {
-        server.respond(msg.id, { decision: 'accept' });
-        return;
-      }
-
-      // Unknown server request — accept generically
-      server.respond(msg.id, {});
-    });
-
-    // Start IPC polling for mid-turn message injection
-    ipcPollTimer = setTimeout(pollIpcDuringTurn, IPC_POLL_MS);
-
-    // Start the turn
-    server.startTurn(threadId, prompt)
-      .then((id) => { turnId = id; })
-      .catch((err) => {
-        if (!resolved) {
-          clearTimeout(timer);
-          resolved = true;
-          cleanup();
-          resolve({
-            result: '',
-            error: `Failed to start turn: ${err.message}`,
-            turnId: '',
-          });
-        }
-      });
-  });
+  const input: UserInput[] = [];
+  const cleanText = text.replace(imagePattern, '').trim();
+  if (cleanText) {
+    input.push({ type: 'text', text: cleanText });
+  }
+  for (const imgPath of imagePaths) {
+    if (fs.existsSync(imgPath)) {
+      input.push({ type: 'local_image', path: imgPath });
+      log(`Adding image input: ${imgPath}`);
+    } else {
+      log(`Image not found, skipping: ${imgPath}`);
+    }
+  }
+  return input.length > 0 ? input : text;
 }
 
-// ── Main ───────────────────────────────────────────────────────────
+// ── Turn Execution ────────────────────────────────────────────────
+
+/**
+ * Execute a single turn using the SDK. The SDK wraps `codex exec`,
+ * ensuring the agent completes all work before returning.
+ */
+async function executeTurn(
+  thread: Thread,
+  input: string | UserInput[],
+): Promise<{ result: string; error?: string }> {
+  const ac = new AbortController();
+
+  // Poll close sentinel during turn
+  const sentinel = setInterval(() => {
+    if (shouldClose()) {
+      log('Close sentinel detected during turn, aborting');
+      ac.abort();
+    }
+  }, IPC_POLL_MS);
+
+  try {
+    const turn = await thread.run(input, { signal: ac.signal });
+    return { result: turn.finalResponse };
+  } catch (err) {
+    if (ac.signal.aborted) {
+      return { result: '' };
+    }
+    return {
+      result: '',
+      error: err instanceof Error ? err.message : String(err),
+    };
+  } finally {
+    clearInterval(sentinel);
+  }
+}
+
+// ── Main ──────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
   let containerInput: ContainerInput;
@@ -583,19 +230,35 @@ async function main(): Promise<void> {
     prompt += '\n' + pending.join('\n');
   }
 
-  // Spawn app-server
-  const server = new CodexAppServer();
+  // Build thread options
+  const threadOptions: ThreadOptions = {
+    workingDirectory: EFFECTIVE_CWD,
+    approvalPolicy: 'never',
+    sandboxMode: 'danger-full-access',
+    networkAccessEnabled: true,
+    webSearchMode: 'live',
+  };
+  if (CODEX_MODEL) threadOptions.model = CODEX_MODEL;
+  if (CODEX_EFFORT) {
+    threadOptions.modelReasoningEffort = CODEX_EFFORT as ThreadOptions['modelReasoningEffort'];
+  }
+
+  // Create SDK instance (inherits env from parent — CODEX_HOME, OPENAI_API_KEY, etc.)
+  const codex = new Codex();
+
+  // Start or resume thread (resume may fail on first run, fallback to new thread)
+  let thread: Thread;
+  if (containerInput.sessionId) {
+    thread = codex.resumeThread(containerInput.sessionId, threadOptions);
+    log(`Thread resuming (session: ${containerInput.sessionId})`);
+  } else {
+    thread = codex.startThread(threadOptions);
+    log('Thread started (new session)');
+  }
+
+  let turnCount = 0;
 
   try {
-    await server.initialize();
-
-    // Start or resume thread
-    const threadId = containerInput.sessionId
-      ? await server.resumeThread(containerInput.sessionId)
-      : await server.startThread();
-
-    let turnCount = 0;
-
     // Main turn loop
     while (true) {
       turnCount++;
@@ -604,19 +267,27 @@ async function main(): Promise<void> {
         writeOutput({
           status: 'success',
           result: '[세션 턴 제한 도달. 새 메시지로 다시 시작됩니다.]',
-          newSessionId: threadId,
+          newSessionId: thread.id || undefined,
         });
         break;
       }
 
+      const input = parseInput(prompt);
       log(`Starting turn ${turnCount}/${MAX_TURNS}...`);
 
-      const { result, error } = await executeTurn(server, threadId, prompt);
+      let { result, error } = await executeTurn(thread, input);
+
+      // Fallback: if resume failed on first turn, retry with a new thread
+      if (error && turnCount === 1 && containerInput.sessionId) {
+        log(`Resume may have failed, retrying with new thread: ${error}`);
+        thread = codex.startThread(threadOptions);
+        ({ result, error } = await executeTurn(thread, input));
+      }
 
       // Check close sentinel
       if (shouldClose()) {
         if (result) {
-          writeOutput({ status: 'success', result, newSessionId: threadId });
+          writeOutput({ status: 'success', result, newSessionId: thread.id || undefined });
         }
         log('Close sentinel detected, exiting');
         break;
@@ -627,14 +298,14 @@ async function main(): Promise<void> {
         writeOutput({
           status: 'error',
           result: result || null,
-          newSessionId: threadId,
+          newSessionId: thread.id || undefined,
           error,
         });
       } else {
         writeOutput({
           status: 'success',
           result: result || null,
-          newSessionId: threadId,
+          newSessionId: thread.id || undefined,
         });
       }
 
@@ -657,8 +328,6 @@ async function main(): Promise<void> {
       result: null,
       error: errorMessage,
     });
-  } finally {
-    server.kill();
   }
 }
 
