@@ -22,6 +22,7 @@ const BASE_RETRY_MS = 5000;
 interface GroupState {
   active: boolean;
   idleWaiting: boolean;
+  closingStdin: boolean;
   isTaskProcess: boolean;
   runningTaskId: string | null;
   currentRunId: string | null;
@@ -57,6 +58,7 @@ export class GroupQueue {
       state = {
         active: false,
         idleWaiting: false,
+        closingStdin: false,
         isTaskProcess: false,
         runningTaskId: null,
         currentRunId: null,
@@ -215,10 +217,18 @@ export class GroupQueue {
           groupJid,
           runId: state.currentRunId,
           active: state.active,
+          closingStdin: state.closingStdin,
           groupFolder: state.groupFolder,
           isTaskProcess: state.isTaskProcess,
         },
         'Cannot pipe follow-up message to active agent',
+      );
+      return false;
+    }
+    if (state.closingStdin) {
+      logger.info(
+        { groupJid, runId: state.currentRunId, groupFolder: state.groupFolder },
+        'Skipping follow-up IPC because active agent is closing',
       );
       return false;
     }
@@ -266,6 +276,8 @@ export class GroupQueue {
   ): void {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder) return;
+    state.closingStdin = true;
+    state.idleWaiting = false;
 
     const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
@@ -302,6 +314,7 @@ export class GroupQueue {
     const runId = this.createRunId();
     state.active = true;
     state.idleWaiting = false;
+    state.closingStdin = false;
     state.isTaskProcess = false;
     state.currentRunId = runId;
     state.pendingMessages = false;
@@ -350,6 +363,8 @@ export class GroupQueue {
       );
       state.active = false;
       state.startedAt = null;
+      state.idleWaiting = false;
+      state.closingStdin = false;
       state.process = null;
       state.processName = null;
       state.groupFolder = null;
@@ -363,6 +378,7 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     state.active = true;
     state.idleWaiting = false;
+    state.closingStdin = false;
     state.isTaskProcess = true;
     state.runningTaskId = task.id;
     state.startedAt = Date.now();
@@ -382,6 +398,8 @@ export class GroupQueue {
       state.isTaskProcess = false;
       state.runningTaskId = null;
       state.startedAt = null;
+      state.idleWaiting = false;
+      state.closingStdin = false;
       state.process = null;
       state.processName = null;
       state.groupFolder = null;

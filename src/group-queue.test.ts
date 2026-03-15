@@ -413,6 +413,34 @@ describe('GroupQueue', () => {
     await vi.advanceTimersByTimeAsync(10);
   });
 
+  it('does not pipe follow-up messages to an agent after closeStdin', async () => {
+    let resolveProcess: () => void;
+
+    const processMessages = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        resolveProcess = resolve;
+      });
+      return true;
+    });
+
+    queue.setProcessMessagesFn(processMessages);
+    queue.enqueueMessageCheck('group1@g.us', 'test-group');
+    await vi.advanceTimersByTimeAsync(10);
+
+    queue.registerProcess('group1@g.us', {} as any, 'agent-1', 'test-group');
+    queue.notifyIdle('group1@g.us');
+    queue.closeStdin('group1@g.us');
+
+    expect(queue.sendMessage('group1@g.us', 'hello after clear')).toBe(false);
+
+    queue.enqueueMessageCheck('group1@g.us', 'test-group');
+
+    resolveProcess!();
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(processMessages).toHaveBeenCalledTimes(2);
+  });
+
   it('preempts when idle arrives with pending tasks', async () => {
     const fs = await import('fs');
     let resolveProcess: () => void;
