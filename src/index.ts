@@ -680,69 +680,76 @@ async function buildUsageContent(): Promise<string> {
     fetchCodexUsage(),
   ]);
 
-  // Claude Code usage
+  // Progress bar helper
+  const bar = (pct: number) => {
+    const filled = Math.round(pct / 10);
+    return '█'.repeat(filled) + '░'.repeat(10 - filled);
+  };
+
+  // Unified usage section with progress bars
+  lines.push('📊 *사용량*');
+
+  type UsageRow = { name: string; h5pct: number; h5reset: string; d7pct: number; d7reset: string };
+  const rows: UsageRow[] = [];
+
   if (claudeUsage) {
-    lines.push('☁️ *Claude Code*');
-    if (claudeUsage.five_hour) {
-      // utilization may be fraction (0-1) or percentage (0-100)
-      const raw = claudeUsage.five_hour.utilization;
-      const pct = raw > 1 ? Math.round(raw) : Math.round(raw * 100);
-      lines.push(
-        `• 5시간: ${usageEmoji(pct)} ${pct}% (리셋: ${formatResetKST(claudeUsage.five_hour.resets_at)})`,
-      );
-    }
-    if (claudeUsage.seven_day) {
-      const raw = claudeUsage.seven_day.utilization;
-      const pct = raw > 1 ? Math.round(raw) : Math.round(raw * 100);
-      lines.push(
-        `• 7일: ${usageEmoji(pct)} ${pct}% (리셋: ${formatResetKST(claudeUsage.seven_day.resets_at)})`,
-      );
-    }
-    lines.push('');
+    const h5 = claudeUsage.five_hour;
+    const d7 = claudeUsage.seven_day;
+    rows.push({
+      name: 'Claude',
+      h5pct: h5 ? (h5.utilization > 1 ? Math.round(h5.utilization) : Math.round(h5.utilization * 100)) : -1,
+      h5reset: h5 ? formatResetKST(h5.resets_at) : '',
+      d7pct: d7 ? (d7.utilization > 1 ? Math.round(d7.utilization) : Math.round(d7.utilization * 100)) : -1,
+      d7reset: d7 ? formatResetKST(d7.resets_at) : '',
+    });
   }
 
-  // Codex usage
   if (codexUsage && Array.isArray(codexUsage)) {
-    lines.push('🤖 *Codex CLI*');
-    for (const limit of codexUsage) {
-      const p = Math.round(limit.primary.usedPercent);
-      const s = Math.round(limit.secondary.usedPercent);
-      const name = limit.limitName || limit.limitId || 'Codex';
-      lines.push(
-        `• ${name} 5시간: ${usageEmoji(p)} ${p}% (리셋: ${formatResetKST(limit.primary.resetsAt)})`,
-      );
-      lines.push(
-        `• ${name} 7일: ${usageEmoji(s)} ${s}% (리셋: ${formatResetKST(limit.secondary.resetsAt)})`,
-      );
+    const relevant = codexUsage.filter(
+      (l) => l.primary.usedPercent > 0 || l.secondary.usedPercent > 0,
+    );
+    const display = relevant.length > 0 ? relevant : codexUsage.slice(0, 1);
+    for (const limit of display) {
+      rows.push({
+        name: 'Codex',
+        h5pct: Math.round(limit.primary.usedPercent),
+        h5reset: formatResetKST(limit.primary.resetsAt),
+        d7pct: Math.round(limit.secondary.usedPercent),
+        d7reset: formatResetKST(limit.secondary.resetsAt),
+      });
     }
-    lines.push('');
   }
 
-  if (!claudeUsage && !codexUsage) {
-    lines.push('_API 사용량 조회 불가_');
-    lines.push('');
+  if (rows.length > 0) {
+    lines.push('```');
+    lines.push('        5-Hour             7-Day');
+    for (const r of rows) {
+      const h5 = r.h5pct >= 0 ? `${bar(r.h5pct)} ${String(r.h5pct).padStart(3)}%` : '  —  ';
+      const d7 = r.d7pct >= 0 ? `${bar(r.d7pct)} ${String(r.d7pct).padStart(3)}%` : '  —  ';
+      lines.push(`${r.name.padEnd(8)}${h5}   ${d7}`);
+    }
+    lines.push('```');
+  } else {
+    lines.push('_조회 불가_');
   }
+  lines.push('');
 
-  // System resources
+  // System resources with progress bars
   lines.push('🖥️ *서버*');
 
   const loadAvg = os.loadavg();
   const cpuCount = os.cpus().length;
-  const cpuPct1 = Math.round((loadAvg[0] / cpuCount) * 100);
-  const cpuPct5 = Math.round((loadAvg[1] / cpuCount) * 100);
-  const cpuPct15 = Math.round((loadAvg[2] / cpuCount) * 100);
-  lines.push(
-    `• CPU: ${usageEmoji(cpuPct1)} ${cpuPct1}% (1m) | ${cpuPct5}% (5m) | ${cpuPct15}% (15m)`,
-  );
+  const cpuPct = Math.round((loadAvg[1] / cpuCount) * 100); // 5min avg
 
   const totalMem = os.totalmem();
   const usedMem = totalMem - os.freemem();
   const memPct = Math.round((usedMem / totalMem) * 100);
-  lines.push(
-    `• 메모리: ${usageEmoji(memPct)} ${memPct}% (${(usedMem / 1073741824).toFixed(1)}GB / ${(totalMem / 1073741824).toFixed(1)}GB)`,
-  );
+  const memUsedGB = (usedMem / 1073741824).toFixed(1);
+  const memTotalGB = (totalMem / 1073741824).toFixed(1);
 
-  let diskLine = '• 디스크: 확인 불가';
+  let diskPct = 0;
+  let diskUsedGB = '?';
+  let diskTotalGB = '?';
   try {
     const df = execSync('df -B1 / | tail -1', {
       encoding: 'utf-8',
@@ -751,18 +758,23 @@ async function buildUsageContent(): Promise<string> {
     const parts = df.split(/\s+/);
     const diskUsed = parseInt(parts[2], 10);
     const diskTotal = parseInt(parts[1], 10);
-    const diskPct = Math.round((diskUsed / diskTotal) * 100);
-    diskLine = `• 디스크: ${usageEmoji(diskPct)} ${diskPct}% (${(diskUsed / 1073741824).toFixed(1)}GB / ${(diskTotal / 1073741824).toFixed(1)}GB)`;
+    diskPct = Math.round((diskUsed / diskTotal) * 100);
+    diskUsedGB = (diskUsed / 1073741824).toFixed(0);
+    diskTotalGB = (diskTotal / 1073741824).toFixed(0);
   } catch {
     /* ignore */
   }
-  lines.push(diskLine);
 
-  lines.push(`• 업타임: ${formatElapsed(os.uptime() * 1000)}`);
+  lines.push('```');
+  lines.push(`${'CPU'.padEnd(8)}${bar(cpuPct)} ${String(cpuPct).padStart(3)}%`);
+  lines.push(`${'Memory'.padEnd(8)}${bar(memPct)} ${String(memPct).padStart(3)}%  ${memUsedGB}/${memTotalGB}GB`);
+  lines.push(`${'Disk'.padEnd(8)}${bar(diskPct)} ${String(diskPct).padStart(3)}%  ${diskUsedGB}/${diskTotalGB}GB`);
+  lines.push(`${'Uptime'.padEnd(8)}${formatElapsed(os.uptime() * 1000)}`);
+  lines.push('```');
 
   return (
     lines.join('\n') +
-    `\n\n_${new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}_`
+    `\n_${new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}_`
   );
 }
 
