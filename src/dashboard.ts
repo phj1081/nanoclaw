@@ -3,6 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+import { USAGE_DASHBOARD_ENABLED } from './config.js';
 import { readEnvFile } from './env.js';
 import { GroupQueue, GroupStatus } from './group-queue.js';
 import { logger } from './logger.js';
@@ -493,7 +494,7 @@ export async function startUsageDashboard(
   opts: DashboardOptions,
 ): Promise<void> {
   if (!opts.statusChannelId) return;
-  if (process.env.USAGE_DASHBOARD !== 'true') return;
+  if (!USAGE_DASHBOARD_ENABLED) return;
 
   const statusJid = `dc:${opts.statusChannelId}`;
 

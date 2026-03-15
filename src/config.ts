@@ -7,6 +7,8 @@ const envConfig = readEnvFile([
   'ASSISTANT_NAME',
   'ASSISTANT_HAS_OWN_NUMBER',
   'SESSION_COMMAND_USER_IDS',
+  'STATUS_CHANNEL_ID',
+  'USAGE_DASHBOARD',
 ]);
 
 export const ASSISTANT_NAME =
@@ -78,9 +80,12 @@ export const TRIGGER_PATTERN = new RegExp(
 );
 
 // Status dashboard: Discord channel ID for live agent status updates
-export const STATUS_CHANNEL_ID = process.env.STATUS_CHANNEL_ID || '';
+export const STATUS_CHANNEL_ID =
+  process.env.STATUS_CHANNEL_ID || envConfig.STATUS_CHANNEL_ID || '';
 export const STATUS_UPDATE_INTERVAL = 10000; // 10s
 export const USAGE_UPDATE_INTERVAL = 300000; // 5 minutes
+export const USAGE_DASHBOARD_ENABLED =
+  (process.env.USAGE_DASHBOARD || envConfig.USAGE_DASHBOARD || '') === 'true';
 
 // Timezone for scheduled tasks (cron expressions, etc.)
 // Uses system timezone by default
