@@ -82,14 +82,14 @@ function prepareGroupEnvironment(
   }
 
   // Sync skills into each group's .claude/ session dir
-  // Sources: 1) user's global ~/.claude/skills  2) project workDir/.claude/skills  3) container/skills/
+  // Sources: 1) user's global ~/.claude/skills  2) project workDir/.claude/skills  3) runners/skills/
   const workDirClaude = group.workDir
     ? path.join(group.workDir, '.claude')
     : null;
   const skillSources = [
     path.join(os.homedir(), '.claude', 'skills'),
     ...(workDirClaude ? [path.join(workDirClaude, 'skills')] : []),
-    path.join(projectRoot, 'container', 'skills'),
+    path.join(projectRoot, 'runners', 'skills'),
   ];
   const skillsDst = path.join(groupSessionsDir, 'skills');
   for (const src of skillSources) {
@@ -128,7 +128,7 @@ function prepareGroupEnvironment(
   // Determine runner directory
   const agentType = group.agentType || 'claude-code';
   const runnerDirName = agentType === 'codex' ? 'codex-runner' : 'agent-runner';
-  const runnerDir = path.join(projectRoot, 'container', runnerDirName);
+  const runnerDir = path.join(projectRoot, 'runners', runnerDirName);
 
   // Build environment variables for the runner process
   const envVars = readEnvFile([
@@ -222,10 +222,10 @@ function prepareGroupEnvironment(
       }
     }
     // Sync skills into Codex session dir
-    // SSOT: ~/.claude/skills/ (shared with Claude Code) + container/skills/
+    // SSOT: ~/.claude/skills/ (shared with Claude Code) + runners/skills/
     const codexSkillSources = [
       path.join(os.homedir(), '.claude', 'skills'),
-      path.join(projectRoot, 'container', 'skills'),
+      path.join(projectRoot, 'runners', 'skills'),
     ];
     const codexSkillsDst = path.join(sessionCodexDir, 'skills');
     for (const src of codexSkillSources) {
@@ -245,7 +245,7 @@ function prepareGroupEnvironment(
     // Inject nanoclaw MCP server into Codex config.toml
     const mcpServerPath = path.join(
       projectRoot,
-      'container',
+      'runners',
       'agent-runner',
       'dist',
       'ipc-mcp-stdio.js',
@@ -333,7 +333,7 @@ export async function runAgentProcess(
   if (!fs.existsSync(distEntry)) {
     logger.error(
       { runnerDir },
-      'Runner not built. Run: cd container/agent-runner && npm install && npm run build',
+      'Runner not built. Run: cd runners/agent-runner && npm install && npm run build',
     );
     return {
       status: 'error',

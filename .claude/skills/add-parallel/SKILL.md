@@ -78,7 +78,7 @@ const allowedVars = ['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY', 'PARALLEL_A
 
 ### 4. Configure MCP Servers in Agent Runner
 
-Update `container/agent-runner/src/index.ts`:
+Update `runners/agent-runner/src/index.ts`:
 
 Find the section where `mcpServers` is configured (around line 237-252):
 ```typescript
@@ -219,7 +219,7 @@ AskUserQuestion: I can do deep research on [topic] using Parallel's Task API. Th
 Build the container with updated agent runner:
 
 ```bash
-./container/build.sh
+./runners/build.sh
 ```
 
 Verify the build:
@@ -286,5 +286,5 @@ To remove Parallel AI integration:
 1. Remove from .env: `sed -i.bak '/PARALLEL_API_KEY/d' .env`
 2. Revert changes to container-runner.ts and agent-runner/src/index.ts
 3. Remove Web Research Tools section from groups/main/CLAUDE.md
-4. Rebuild: `./container/build.sh && npm run build`
+4. Rebuild: `./runners/build.sh && npm run build`
 5. Restart: `launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux)

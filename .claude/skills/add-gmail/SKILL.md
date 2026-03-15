@@ -48,7 +48,7 @@ This merges in:
 - `src/channels/gmail.test.ts` (unit tests)
 - `import './gmail.js'` appended to the channel barrel file `src/channels/index.ts`
 - Gmail credentials mount (`~/.gmail-mcp`) in `src/container-runner.ts`
-- Gmail MCP server (`@gongrzhe/server-gmail-autoauth-mcp`) and `mcp__gmail__*` allowed tool in `container/agent-runner/src/index.ts`
+- Gmail MCP server (`@gongrzhe/server-gmail-autoauth-mcp`) and `mcp__gmail__*` allowed tool in `runners/agent-runner/src/index.ts`
 - `googleapis` npm dependency in `package.json`
 
 If the merge reports conflicts, resolve them by reading the conflicted files and understanding the intent of both sides.
@@ -199,7 +199,7 @@ npx -y @gongrzhe/server-gmail-autoauth-mcp
 ### Tool-only mode
 
 1. Remove `~/.gmail-mcp` mount from `src/container-runner.ts`
-2. Remove `gmail` MCP server and `mcp__gmail__*` from `container/agent-runner/src/index.ts`
+2. Remove `gmail` MCP server and `mcp__gmail__*` from `runners/agent-runner/src/index.ts`
 3. Rebuild and restart
 4. Clear stale agent-runner copies: `rm -r data/sessions/*/agent-runner-src 2>/dev/null || true`
 5. Rebuild: `cd container && ./build.sh && cd .. && npm run build && launchctl kickstart -k gui/$(id -u)/com.nanoclaw` (macOS) or `systemctl --user restart nanoclaw` (Linux)
@@ -209,7 +209,7 @@ npx -y @gongrzhe/server-gmail-autoauth-mcp
 1. Delete `src/channels/gmail.ts` and `src/channels/gmail.test.ts`
 2. Remove `import './gmail.js'` from `src/channels/index.ts`
 3. Remove `~/.gmail-mcp` mount from `src/container-runner.ts`
-4. Remove `gmail` MCP server and `mcp__gmail__*` from `container/agent-runner/src/index.ts`
+4. Remove `gmail` MCP server and `mcp__gmail__*` from `runners/agent-runner/src/index.ts`
 5. Uninstall: `npm uninstall googleapis`
 6. Rebuild and restart
 7. Clear stale agent-runner copies: `rm -r data/sessions/*/agent-runner-src 2>/dev/null || true`

@@ -18,7 +18,7 @@ Run `/update-nanoclaw` in Claude Code.
 **Preview**: runs `git log` and `git diff` against the merge base to show upstream changes since your last sync. Groups changed files into categories:
 - **Skills** (`.claude/skills/`): unlikely to conflict unless you edited an upstream skill
 - **Source** (`src/`): may conflict if you modified the same files
-- **Build/config** (`package.json`, `tsconfig*.json`, `container/`): review needed
+- **Build/config** (`package.json`, `tsconfig*.json`, `runners/`): review needed
 
 **Update paths** (you pick one):
 - `merge` (default): `git merge upstream/<branch>`. Resolves all conflicts in one pass.
@@ -109,7 +109,7 @@ Show file-level impact from upstream:
 Bucket the upstream changed files:
 - **Skills** (`.claude/skills/`): unlikely to conflict unless the user edited an upstream skill
 - **Source** (`src/`): may conflict if user modified the same files
-- **Build/config** (`package.json`, `package-lock.json`, `tsconfig*.json`, `container/`, `launchd/`): review needed
+- **Build/config** (`package.json`, `package-lock.json`, `tsconfig*.json`, `runners/`, `launchd/`): review needed
 - **Other**: docs, tests, misc
 
 Present these buckets to the user and ask them to choose one path using AskUserQuestion:

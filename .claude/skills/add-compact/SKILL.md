@@ -34,7 +34,7 @@ This adds:
 - `src/session-commands.ts` (extract and authorize session commands)
 - `src/session-commands.test.ts` (unit tests for command parsing and auth)
 - Session command interception in `src/index.ts` (both `processGroupMessages` and `startMessageLoop`)
-- Slash command handling in `container/agent-runner/src/index.ts`
+- Slash command handling in `runners/agent-runner/src/index.ts`
 
 ### Validate
 
@@ -46,7 +46,7 @@ npm run build
 ### Rebuild container
 
 ```bash
-./container/build.sh
+./runners/build.sh
 ```
 
 ### Restart service
@@ -106,7 +106,7 @@ cd /tmp/nanoclaw-test
 claude  # then run /add-compact
 npm run build
 npm test
-./container/build.sh
+./runners/build.sh
 # Manual: send /compact from main group, verify compaction + continuation
 # Manual: send @<assistant> /compact from non-main as non-admin, verify denial
 # Manual: send @<assistant> /compact from non-main as admin, verify allowed

@@ -40,7 +40,7 @@ This merges in:
 - `src/image.test.ts` (8 unit tests)
 - Image attachment handling in `src/channels/whatsapp.ts`
 - Image passing to agent in `src/index.ts` and `src/container-runner.ts`
-- Image content block support in `container/agent-runner/src/index.ts`
+- Image content block support in `runners/agent-runner/src/index.ts`
 - `sharp` npm dependency in `package.json`
 
 If the merge reports conflicts, resolve them by reading the conflicted files and understanding the intent of both sides.
@@ -59,13 +59,13 @@ All tests must pass and build must be clean before proceeding.
 
 1. Rebuild the container (agent-runner changes need a rebuild):
    ```bash
-   ./container/build.sh
+   ./runners/build.sh
    ```
 
 2. Sync agent-runner source to group caches:
    ```bash
    for dir in data/sessions/*/agent-runner-src/; do
-     cp container/agent-runner/src/*.ts "$dir"
+     cp runners/agent-runner/src/*.ts "$dir"
    done
    ```
 

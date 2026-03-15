@@ -15,7 +15,7 @@ Tools added:
 
 ### Check if already applied
 
-Check if `container/agent-runner/src/ollama-mcp-stdio.ts` exists. If it does, skip to Phase 3 (Configure).
+Check if `runners/agent-runner/src/ollama-mcp-stdio.ts` exists. If it does, skip to Phase 3 (Configure).
 
 ### Check prerequisites
 
@@ -59,9 +59,9 @@ git merge upstream/skill/ollama-tool
 ```
 
 This merges in:
-- `container/agent-runner/src/ollama-mcp-stdio.ts` (Ollama MCP server)
+- `runners/agent-runner/src/ollama-mcp-stdio.ts` (Ollama MCP server)
 - `scripts/ollama-watch.sh` (macOS notification watcher)
-- Ollama MCP config in `container/agent-runner/src/index.ts` (allowedTools + mcpServers)
+- Ollama MCP config in `runners/agent-runner/src/index.ts` (allowedTools + mcpServers)
 - `[OLLAMA]` log surfacing in `src/container-runner.ts`
 - `OLLAMA_HOST` in `.env.example`
 
@@ -73,8 +73,8 @@ Existing groups have a cached copy of the agent-runner source. Copy the new file
 
 ```bash
 for dir in data/sessions/*/agent-runner-src; do
-  cp container/agent-runner/src/ollama-mcp-stdio.ts "$dir/"
-  cp container/agent-runner/src/index.ts "$dir/"
+  cp runners/agent-runner/src/ollama-mcp-stdio.ts "$dir/"
+  cp runners/agent-runner/src/index.ts "$dir/"
 done
 ```
 
@@ -82,7 +82,7 @@ done
 
 ```bash
 npm run build
-./container/build.sh
+./runners/build.sh
 ```
 
 Build must be clean before proceeding.
@@ -138,9 +138,9 @@ Look for:
 ### Agent says "Ollama is not installed"
 
 The agent is trying to run `ollama` CLI inside the container instead of using the MCP tools. This means:
-1. The MCP server wasn't registered — check `container/agent-runner/src/index.ts` has the `ollama` entry in `mcpServers`
+1. The MCP server wasn't registered — check `runners/agent-runner/src/index.ts` has the `ollama` entry in `mcpServers`
 2. The per-group source wasn't updated — re-copy files (see Phase 2)
-3. The container wasn't rebuilt — run `./container/build.sh`
+3. The container wasn't rebuilt — run `./runners/build.sh`
 
 ### "Failed to connect to Ollama"
 

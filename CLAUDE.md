@@ -18,8 +18,8 @@ Two systemd services (`nanoclaw`, `nanoclaw-codex`) share the same codebase but 
 | `src/config.ts` | Trigger pattern, paths, intervals |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
-| `container/agent-runner/` | Claude Code runner (Agent SDK) |
-| `container/codex-runner/` | Codex runner (SDK, `codex exec` wrapper) |
+| `runners/agent-runner/` | Claude Code runner (Agent SDK) |
+| `runners/codex-runner/` | Codex runner (SDK, `codex exec` wrapper) |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 
 ## Skills

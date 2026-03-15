@@ -268,7 +268,7 @@ nanoclaw/
 │   ├── task-scheduler.ts          # Runs scheduled tasks when due
 │   └── container-runner.ts        # Spawns agents in containers
 │
-├── container/
+├── runners/
 │   ├── Dockerfile                 # Container image (runs as 'node' user, includes Claude Code CLI)
 │   ├── build.sh                   # Build script for container image
 │   ├── agent-runner/              # Code that runs inside the container

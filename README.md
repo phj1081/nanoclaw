@@ -60,7 +60,7 @@ nanoclaw/
 │   └── channels/
 │       ├── registry.ts         # Channel self-registration system
 │       └── discord.ts          # Discord: mentions, images, typing, file attachments
-├── container/
+├── runners/
 │   ├── agent-runner/           # Claude Code runner (Agent SDK, multimodal input)
 │   ├── codex-runner/           # Codex runner (app-server JSON-RPC, auto-continue)
 │   └── skills/                 # Shared agent skills (browser, etc.)
@@ -77,7 +77,7 @@ nanoclaw/
 
 ### Codex App-Server Integration
 
-The Codex runner (`container/codex-runner/`) communicates with `codex app-server` via JSON-RPC over stdio:
+The Codex runner (`runners/codex-runner/`) communicates with `codex app-server` via JSON-RPC over stdio:
 
 - **Session persistence**: Thread IDs stored in DB, sessions saved as JSONL on disk
 - **Streaming**: `item/agentMessage/delta` notifications for real-time text
@@ -98,7 +98,7 @@ Bidirectional image support through Discord:
 
 Skills are managed from a single source of truth (`~/.claude/skills/` on the server) and automatically synced to all agent session directories at process start:
 
-- Claude Code sessions: `~/.claude/skills/` + project `container/skills/`
+- Claude Code sessions: `~/.claude/skills/` + project `runners/skills/`
 - Codex sessions: Same sources, synced to per-group `.codex/` directories
 - Skills auto-register as slash commands (`/name`) in Claude Code and `$name` in Codex
 

@@ -11,7 +11,7 @@ Run setup steps automatically. Only pause when user action is required (channel 
 
 **UX Note:** Use `AskUserQuestion` for all user-facing questions.
 
-**Architecture:** NanoClaw runs agents as direct host processes (no Docker/containers). Each agent type (Claude Code, Codex) has its own runner in `container/agent-runner/` and `container/codex-runner/`.
+**Architecture:** NanoClaw runs agents as direct host processes (no Docker/containers). Each agent type (Claude Code, Codex) has its own runner in `runners/agent-runner/` and `runners/codex-runner/`.
 
 ## 0. Git & Fork Setup
 
@@ -76,12 +76,12 @@ Run `npx tsx setup/index.ts --step environment` and parse the status block.
 Run `npx tsx setup/index.ts --step runners` and parse the status block.
 
 This builds the agent runners that execute as host processes:
-- `container/agent-runner/` — Claude Code agent (via Claude Agent SDK)
-- `container/codex-runner/` — Codex agent (via Codex CLI)
+- `runners/agent-runner/` — Claude Code agent (via Claude Agent SDK)
+- `runners/codex-runner/` — Codex agent (via Codex CLI)
 
-**If BUILD_OK=false:** Read `logs/setup.log` for the error. Common fix: `cd container/agent-runner && npm install && npm run build`.
+**If BUILD_OK=false:** Read `logs/setup.log` for the error. Common fix: `cd runners/agent-runner && npm install && npm run build`.
 
-**If CODEX_RUNNER=false but AGENT_RUNNER=true:** Codex runner failed to build. Not critical if you only use Claude Code. Fix: `cd container/codex-runner && npm install && npm run build`.
+**If CODEX_RUNNER=false but AGENT_RUNNER=true:** Codex runner failed to build. Not critical if you only use Claude Code. Fix: `cd runners/codex-runner && npm install && npm run build`.
 
 ## 4. Claude Authentication (No Script)
 
