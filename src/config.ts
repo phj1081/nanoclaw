@@ -20,9 +20,11 @@ export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER ||
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const SESSION_COMMAND_USER_IDS = new Set(
-  (process.env.SESSION_COMMAND_USER_IDS ||
+  (
+    process.env.SESSION_COMMAND_USER_IDS ||
     envConfig.SESSION_COMMAND_USER_IDS ||
-    '')
+    ''
+  )
     .split(',')
     .map((id) => id.trim())
     .filter(Boolean),

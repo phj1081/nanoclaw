@@ -8,9 +8,10 @@ import { GroupQueue, GroupStatus } from './group-queue.js';
 import { logger } from './logger.js';
 import { Channel, ChannelMeta, RegisteredGroup } from './types.js';
 
-interface DashboardOptions {
+export interface DashboardOptions {
   assistantName: string;
   channels: Channel[];
+  getSessions: () => Record<string, string>;
   queue: GroupQueue;
   registeredGroups: () => Record<string, RegisteredGroup>;
   statusChannelId: string;
@@ -114,8 +115,16 @@ function getStatusLabel(status: GroupStatus): string {
   return '비활성';
 }
 
-function buildStatusContent(opts: DashboardOptions): string {
+function getSessionLabel(sessionId: string | undefined): string {
+  if (!sessionId) return '세션 없음';
+  const shortId = sessionId.length > 8 ? sessionId.slice(-8) : sessionId;
+  return `세션 ${shortId}`;
+}
+
+/** @internal - exported for testing */
+export function buildStatusContent(opts: DashboardOptions): string {
   const registeredGroups = opts.registeredGroups();
+  const sessions = opts.getSessions();
   const jids = Object.keys(registeredGroups);
   const statuses = opts.queue.getStatuses(jids);
 
@@ -153,8 +162,9 @@ function buildStatusContent(opts: DashboardOptions): string {
     const lines = categoryEntries.map((entry) => {
       const icon = STATUS_ICONS[entry.status.status] || '⚪';
       const label = getStatusLabel(entry.status);
+      const sessionLabel = getSessionLabel(sessions[entry.group.folder]);
       const name = entry.meta?.name ? `#${entry.meta.name}` : entry.group.name;
-      return `  ${icon} **${name}** — ${label}`;
+      return `  ${icon} **${name}** — ${label} · ${sessionLabel}`;
     });
 
     if (channelMetaCache.size > 0 && categoryName !== '기타') {

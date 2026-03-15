@@ -238,7 +238,9 @@ describe('handleSessionCommand', () => {
       isAdminSender: vi.fn().mockReturnValue(true),
     });
     const result = await handleSessionCommand({
-      missedMessages: [makeMsg('/clear', { is_from_me: false, sender: 'discord-user-1' })],
+      missedMessages: [
+        makeMsg('/clear', { is_from_me: false, sender: 'discord-user-1' }),
+      ],
       isMainGroup: false,
       groupName: 'test',
       triggerPattern: trigger,

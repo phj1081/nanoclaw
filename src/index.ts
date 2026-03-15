@@ -256,6 +256,7 @@ async function main(): Promise<void> {
   const dashboardOpts = {
     assistantName: ASSISTANT_NAME,
     channels,
+    getSessions: () => sessions,
     queue,
     registeredGroups: () => registeredGroups,
     statusChannelId: STATUS_CHANNEL_ID,
