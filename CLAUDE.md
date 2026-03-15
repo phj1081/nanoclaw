@@ -57,7 +57,7 @@ Deploy to server: `scp dist/*.js clone-ej@100.64.185.108:~/nanoclaw/dist/`
 - `nanoclaw.service` — Claude Code bot (`@claude`), `SERVICE_ID=claude`, `SERVICE_AGENT_TYPE=claude-code`
 - `nanoclaw-codex.service` — Codex bot (`@codex`), `SERVICE_ID=codex`, `SERVICE_AGENT_TYPE=codex`
 - Both share the same codebase (`dist/index.js`), differentiated by env vars
-- Currently separate dirs (`store/` vs `store-codex/`), but DB supports shared access:
+- Unified dirs (`store/`, `groups/`, `data/` shared by both services):
   - `router_state`: keys prefixed with `{SERVICE_ID}:` (e.g., `claude:last_timestamp`)
   - `sessions`: composite PK `(group_folder, agent_type)`
   - `registered_groups`: filtered by `agent_type` on load
@@ -65,14 +65,18 @@ Deploy to server: `scp dist/*.js clone-ej@100.64.185.108:~/nanoclaw/dist/`
 
 ## Debugging Paths (Server: clone-ej@100.64.185.108)
 
-| 항목 | Claude (`nanoclaw`) | Codex (`nanoclaw-codex`) |
-|------|---------------------|--------------------------|
-| 서비스 로그 | `journalctl --user -u nanoclaw -f` | `journalctl --user -u nanoclaw-codex -f` |
-| 앱 로그 | `logs/nanoclaw.log` | `logs/nanoclaw-codex.log` |
-| 그룹별 로그 | `groups/{name}/logs/` | `groups-codex/{name}/logs/` |
-| DB | `store/messages.db` | `store-codex/messages.db` |
-| 세션 | `data/sessions/{name}/.claude/` | `data-codex/sessions/{name}/.codex/` |
-| 글로벌 설정 | `groups/global/CLAUDE.md` | `~/.codex/AGENTS.md` |
+Unified DB + directories (both services share `store/`, `groups/`, `data/`):
+
+| 항목 | 경로 |
+|------|------|
+| **DB** | `store/messages.db` (공유, WAL 모드) |
+| 서비스 로그 (Claude) | `journalctl --user -u nanoclaw -f` 또는 `logs/nanoclaw.log` |
+| 서비스 로그 (Codex) | `journalctl --user -u nanoclaw-codex -f` 또는 `logs/nanoclaw-codex.log` |
+| 그룹별 로그 | `groups/{name}/logs/` (공유 채널은 양쪽 봇 로그가 같은 폴더) |
+| Claude 세션 | `data/sessions/{name}/.claude/` |
+| Codex 세션 | `data/sessions/{name}/.codex/` |
+| Claude 글로벌 설정 | `groups/global/CLAUDE.md` |
+| Codex 글로벌 설정 | `~/.codex/AGENTS.md` |
 
 ## Codex SDK
 

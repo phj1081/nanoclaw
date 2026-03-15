@@ -174,13 +174,19 @@ async function executeTurn(
 ): Promise<{ result: string; error?: string }> {
   const ac = new AbortController();
 
-  // Poll close sentinel during turn
+  // Poll close sentinel + heartbeat during turn
+  let turnSeconds = 0;
   const sentinel = setInterval(() => {
     if (shouldClose()) {
       log('Close sentinel detected during turn, aborting');
       ac.abort();
+      return;
     }
-  }, IPC_POLL_MS);
+    turnSeconds += 5;
+    if (turnSeconds % 60 === 0) {
+      log(`Turn in progress... (${Math.round(turnSeconds / 60)}min)`);
+    }
+  }, 5000);
 
   try {
     const turn = await thread.run(input, { signal: ac.signal });

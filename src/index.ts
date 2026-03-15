@@ -42,6 +42,7 @@ import {
   storeChatMetadata,
   storeMessage,
 } from './db.js';
+import { readEnvFile } from './env.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { startIpcWatcher } from './ipc.js';
@@ -552,13 +553,19 @@ interface CodexRateLimit {
 
 async function fetchClaudeUsage(): Promise<ClaudeUsageData | null> {
   try {
-    const configDir =
-      process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
-    const credsPath = path.join(configDir, '.credentials.json');
-    if (!fs.existsSync(credsPath)) return null;
-
-    const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
-    const token = creds?.claudeAiOauth?.accessToken;
+    const envToken = readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN']);
+    let token =
+      process.env.CLAUDE_CODE_OAUTH_TOKEN ||
+      envToken.CLAUDE_CODE_OAUTH_TOKEN ||
+      '';
+    if (!token) {
+      const configDir =
+        process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+      const credsPath = path.join(configDir, '.credentials.json');
+      if (!fs.existsSync(credsPath)) return null;
+      const creds = JSON.parse(fs.readFileSync(credsPath, 'utf-8'));
+      token = creds?.claudeAiOauth?.accessToken || '';
+    }
     if (!token) return null;
 
     const res = await fetch('https://api.anthropic.com/api/oauth/usage', {

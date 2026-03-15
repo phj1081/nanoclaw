@@ -424,22 +424,6 @@ export async function runAgentProcess(
       }
     });
 
-    proc.stderr.on('data', (data) => {
-      const chunk = data.toString();
-      const lines = chunk.trim().split('\n');
-      for (const line of lines) {
-        if (line) logger.debug({ agent: group.folder }, line);
-      }
-      if (stderrTruncated) return;
-      const remaining = AGENT_MAX_OUTPUT_SIZE - stderr.length;
-      if (chunk.length > remaining) {
-        stderr += chunk.slice(0, remaining);
-        stderrTruncated = true;
-      } else {
-        stderr += chunk;
-      }
-    });
-
     let timedOut = false;
     let hadStreamingOutput = false;
     const configTimeout = group.agentConfig?.timeout || AGENT_TIMEOUT;
@@ -464,6 +448,29 @@ export async function runAgentProcess(
       clearTimeout(timeout);
       timeout = setTimeout(killOnTimeout, timeoutMs);
     };
+
+    proc.stderr.on('data', (data) => {
+      const chunk = data.toString();
+      const lines = chunk.trim().split('\n');
+      for (const line of lines) {
+        if (!line) continue;
+        if (line.includes('Turn in progress')) {
+          logger.info({ group: group.name }, line.replace(/^\[.*?\]\s*/, ''));
+        } else {
+          logger.debug({ agent: group.folder }, line);
+        }
+      }
+      // Stderr activity means agent is alive — reset timeout
+      resetTimeout();
+      if (stderrTruncated) return;
+      const remaining = AGENT_MAX_OUTPUT_SIZE - stderr.length;
+      if (chunk.length > remaining) {
+        stderr += chunk.slice(0, remaining);
+        stderrTruncated = true;
+      } else {
+        stderr += chunk;
+      }
+    });
 
     proc.on('close', (code) => {
       clearTimeout(timeout);
