@@ -7,6 +7,7 @@ import {
   ASSISTANT_NAME,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
+  SERVICE_AGENT_TYPE,
   STATUS_CHANNEL_ID,
   STATUS_UPDATE_INTERVAL,
   TIMEZONE,
@@ -82,7 +83,7 @@ function loadState(): void {
     lastAgentTimestamp = {};
   }
   sessions = getAllSessions();
-  registeredGroups = getAllRegisteredGroups();
+  registeredGroups = getAllRegisteredGroups(SERVICE_AGENT_TYPE);
   logger.info(
     { groupCount: Object.keys(registeredGroups).length },
     'State loaded',

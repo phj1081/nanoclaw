@@ -1,7 +1,10 @@
 import pino from 'pino';
 
+const serviceName = (process.env.ASSISTANT_NAME || 'claude').toLowerCase();
+
 export const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
+  name: serviceName,
   transport: { target: 'pino-pretty', options: { colorize: true } },
 });
 

@@ -7,6 +7,11 @@ const envConfig = readEnvFile(['ASSISTANT_NAME', 'ASSISTANT_HAS_OWN_NUMBER']);
 
 export const ASSISTANT_NAME =
   process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+// Service identity for DB partitioning (shared DB, two services)
+export const SERVICE_ID =
+  ASSISTANT_NAME.toLowerCase() === 'codex' ? 'codex' : 'claude';
+export const SERVICE_AGENT_TYPE: 'claude-code' | 'codex' =
+  ASSISTANT_NAME.toLowerCase() === 'codex' ? 'codex' : 'claude-code';
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER ||
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';

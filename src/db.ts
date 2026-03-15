@@ -2,7 +2,13 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
-import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
+import {
+  ASSISTANT_NAME,
+  DATA_DIR,
+  SERVICE_AGENT_TYPE,
+  SERVICE_ID,
+  STORE_DIR,
+} from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
@@ -70,8 +76,10 @@ function createSchema(database: Database.Database): void {
       value TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS sessions (
-      group_folder TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL
+      group_folder TEXT NOT NULL,
+      agent_type TEXT NOT NULL DEFAULT 'claude-code',
+      session_id TEXT NOT NULL,
+      PRIMARY KEY (group_folder, agent_type)
     );
     CREATE TABLE IF NOT EXISTS registered_groups (
       jid TEXT PRIMARY KEY,
@@ -135,6 +143,31 @@ function createSchema(database: Database.Database): void {
     /* column already exists */
   }
 
+  // Migrate sessions table to composite PK (group_folder, agent_type)
+  const sessionCols = database
+    .prepare('PRAGMA table_info(sessions)')
+    .all() as Array<{ name: string }>;
+  if (!sessionCols.some((col) => col.name === 'agent_type')) {
+    database.exec(`
+      CREATE TABLE sessions_new (
+        group_folder TEXT NOT NULL,
+        agent_type TEXT NOT NULL DEFAULT 'claude-code',
+        session_id TEXT NOT NULL,
+        PRIMARY KEY (group_folder, agent_type)
+      );
+    `);
+    database
+      .prepare(
+        `INSERT INTO sessions_new (group_folder, agent_type, session_id)
+         SELECT group_folder, ?, session_id FROM sessions`,
+      )
+      .run(SERVICE_AGENT_TYPE);
+    database.exec(`
+      DROP TABLE sessions;
+      ALTER TABLE sessions_new RENAME TO sessions;
+    `);
+  }
+
   // Add channel and is_group columns if they don't exist (migration for existing DBs)
   try {
     database.exec(`ALTER TABLE chats ADD COLUMN channel TEXT`);
@@ -162,6 +195,8 @@ export function initDatabase(): void {
   fs.mkdirSync(path.dirname(dbPath), { recursive: true });
 
   db = new Database(dbPath);
+  db.pragma('journal_mode = WAL');
+  db.pragma('busy_timeout = 5000');
   createSchema(db);
 
   // Migrate from JSON files if they exist
@@ -527,37 +562,59 @@ export function logTaskRun(log: TaskRunLog): void {
 // --- Router state accessors ---
 
 export function getRouterState(key: string): string | undefined {
+  const prefixedKey = `${SERVICE_ID}:${key}`;
   const row = db
     .prepare('SELECT value FROM router_state WHERE key = ?')
+    .get(prefixedKey) as { value: string } | undefined;
+  if (row) return row.value;
+
+  // Lazy migration: read unprefixed key and migrate to prefixed
+  const old = db
+    .prepare('SELECT value FROM router_state WHERE key = ?')
     .get(key) as { value: string } | undefined;
-  return row?.value;
+  if (old) {
+    db.prepare(
+      'INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)',
+    ).run(prefixedKey, old.value);
+    db.prepare('DELETE FROM router_state WHERE key = ?').run(key);
+    return old.value;
+  }
+  return undefined;
 }
 
 export function setRouterState(key: string, value: string): void {
+  const prefixedKey = `${SERVICE_ID}:${key}`;
   db.prepare(
     'INSERT OR REPLACE INTO router_state (key, value) VALUES (?, ?)',
-  ).run(key, value);
+  ).run(prefixedKey, value);
 }
 
 // --- Session accessors ---
 
 export function getSession(groupFolder: string): string | undefined {
   const row = db
-    .prepare('SELECT session_id FROM sessions WHERE group_folder = ?')
-    .get(groupFolder) as { session_id: string } | undefined;
+    .prepare(
+      'SELECT session_id FROM sessions WHERE group_folder = ? AND agent_type = ?',
+    )
+    .get(groupFolder, SERVICE_AGENT_TYPE) as { session_id: string } | undefined;
   return row?.session_id;
 }
 
 export function setSession(groupFolder: string, sessionId: string): void {
   db.prepare(
-    'INSERT OR REPLACE INTO sessions (group_folder, session_id) VALUES (?, ?)',
-  ).run(groupFolder, sessionId);
+    'INSERT OR REPLACE INTO sessions (group_folder, agent_type, session_id) VALUES (?, ?, ?)',
+  ).run(groupFolder, SERVICE_AGENT_TYPE, sessionId);
 }
 
 export function getAllSessions(): Record<string, string> {
   const rows = db
-    .prepare('SELECT group_folder, session_id FROM sessions')
-    .all() as Array<{ group_folder: string; session_id: string }>;
+    .prepare(
+      'SELECT group_folder, session_id FROM sessions WHERE agent_type = ?',
+    )
+    .all(SERVICE_AGENT_TYPE) as Array<{
+    group_folder: string;
+    session_id: string;
+  }>;
   const result: Record<string, string> = {};
   for (const row of rows) {
     result[row.group_folder] = row.session_id;
@@ -632,8 +689,16 @@ export function setRegisteredGroup(jid: string, group: RegisteredGroup): void {
   );
 }
 
-export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
-  const rows = db.prepare('SELECT * FROM registered_groups').all() as Array<{
+export function getAllRegisteredGroups(
+  agentTypeFilter?: string,
+): Record<string, RegisteredGroup> {
+  const rows = (
+    agentTypeFilter
+      ? db
+          .prepare('SELECT * FROM registered_groups WHERE agent_type = ?')
+          .all(agentTypeFilter)
+      : db.prepare('SELECT * FROM registered_groups').all()
+  ) as Array<{
     jid: string;
     name: string;
     folder: string;

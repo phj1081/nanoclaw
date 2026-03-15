@@ -4,7 +4,7 @@ Dual-agent AI assistant (Claude Code + Codex) over Discord. Based on [qwibitai/n
 
 ## Quick Context
 
-Two systemd services (`nanoclaw`, `nanoclaw-codex`) share the same codebase but run with separate stores, data, and groups. Agents run as direct host processes (no containers). Claude Code uses the Agent SDK; Codex uses `codex app-server` via JSON-RPC. Auth via `CLAUDE_CODE_OAUTH_TOKEN` in `.env` (1-year token from `claude setup-token`).
+Two systemd services (`nanoclaw`, `nanoclaw-codex`) share the same codebase but run with separate stores, data, and groups (will be unified — DB supports shared access via WAL mode + service partitioning). Agents run as direct host processes (no containers). Claude Code uses the Agent SDK; Codex uses the Codex SDK (`codex exec`). Auth via `CLAUDE_CODE_OAUTH_TOKEN` in `.env` (1-year token from `claude setup-token`).
 
 ## Key Files
 
@@ -19,7 +19,7 @@ Two systemd services (`nanoclaw`, `nanoclaw-codex`) share the same codebase but 
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `container/agent-runner/` | Claude Code runner (Agent SDK) |
-| `container/codex-runner/` | Codex runner (app-server JSON-RPC, streaming, turn/steer) |
+| `container/codex-runner/` | Codex runner (SDK, `codex exec` wrapper) |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 
 ## Skills
@@ -54,19 +54,34 @@ Deploy to server: `scp dist/*.js clone-ej@100.64.185.108:~/nanoclaw/dist/`
 
 ## Dual-Service Architecture
 
-- `nanoclaw.service` — Claude Code bot (`@claude`), uses `store/`, `data/`, `groups/`
-- `nanoclaw-codex.service` — Codex bot (`@codex`), uses `store-codex/`, `data-codex/`, `groups-codex/`
-- Both share the same codebase (`dist/index.js`), differentiated by env vars (`NANOCLAW_STORE_DIR`, etc.)
-- Channel registration is per-service DB (`registered_groups` table)
+- `nanoclaw.service` — Claude Code bot (`@claude`), `SERVICE_ID=claude`, `SERVICE_AGENT_TYPE=claude-code`
+- `nanoclaw-codex.service` — Codex bot (`@codex`), `SERVICE_ID=codex`, `SERVICE_AGENT_TYPE=codex`
+- Both share the same codebase (`dist/index.js`), differentiated by env vars
+- Currently separate dirs (`store/` vs `store-codex/`), but DB supports shared access:
+  - `router_state`: keys prefixed with `{SERVICE_ID}:` (e.g., `claude:last_timestamp`)
+  - `sessions`: composite PK `(group_folder, agent_type)`
+  - `registered_groups`: filtered by `agent_type` on load
+  - SQLite WAL mode + `busy_timeout=5000` for concurrent access
 
-## Codex App-Server
+## Debugging Paths (Server: clone-ej@100.64.185.108)
 
-Codex runner uses `codex app-server` JSON-RPC (not `codex exec`):
-- `thread/start` / `thread/resume` for session persistence (threadId-based)
-- `turn/start` for streaming responses (`item/agentMessage/delta`)
-- `turn/steer` for mid-execution message injection (IPC polling during turn)
-- `approvalPolicy: "never"` + `sandbox: "danger-full-access"` for bypass
+| 항목 | Claude (`nanoclaw`) | Codex (`nanoclaw-codex`) |
+|------|---------------------|--------------------------|
+| 서비스 로그 | `journalctl --user -u nanoclaw -f` | `journalctl --user -u nanoclaw-codex -f` |
+| 앱 로그 | `logs/nanoclaw.log` | `logs/nanoclaw-codex.log` |
+| 그룹별 로그 | `groups/{name}/logs/` | `groups-codex/{name}/logs/` |
+| DB | `store/messages.db` | `store-codex/messages.db` |
+| 세션 | `data/sessions/{name}/.claude/` | `data-codex/sessions/{name}/.codex/` |
+| 글로벌 설정 | `groups/global/CLAUDE.md` | `~/.codex/AGENTS.md` |
+
+## Codex SDK
+
+Codex runner uses `@openai/codex-sdk` (wraps `codex exec`):
+- `codex.startThread()` / `codex.resumeThread()` for session persistence
+- `thread.run(input)` for single-shot turn execution (completes all work before returning)
+- `approvalPolicy: "never"` + `sandboxMode: "danger-full-access"` for bypass
 - Per-group: model (`CODEX_MODEL`), effort (`CODEX_EFFORT`), MCP servers via `config.toml`
+- `CODEX_HOME` set to per-group session dir, reads `AGENTS.md` from there + CWD
 
 ## Voice Transcription
 
