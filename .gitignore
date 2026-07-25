@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# Node / Bun
+node_modules/
+.bun-cache/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+
+# Editor / OS noise
+.DS_Store
+*.swp
