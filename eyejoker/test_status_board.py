@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import importlib.util
+import io
 import json
 import pathlib
 import sqlite3
@@ -16,6 +17,35 @@ spec.loader.exec_module(status_board)
 
 
 class CLIProxyQuotaCollectionTests(unittest.TestCase):
+
+    def test_quota_probe_failure_is_logged_without_credential_fields(self):
+        files = [{
+            'name': 'secret-account@example.com-pro.json',
+            'type': 'codex',
+            'auth_index': 'private-auth-index',
+            'status': 'active',
+            'account_id': 'private-account-id',
+        }]
+
+        def fake_fetch(path, _payload=None):
+            if path == '/auth-files':
+                return {'files': files}
+            return {'status_code': 401, 'body': '{"error":"token_expired"}'}
+
+        stderr = io.StringIO()
+        with mock.patch('sys.stderr', stderr):
+            status_board.collect_cliproxy_quota_rows([], fetch=fake_fetch)
+
+        logged = stderr.getvalue()
+        self.assertIn(
+            'cliproxy quota probe failed: provider=codex account=1 '
+            'error=RuntimeError detail=upstream HTTP 401',
+            logged,
+        )
+        self.assertNotIn('secret-account', logged)
+        self.assertNotIn('private-auth-index', logged)
+        self.assertNotIn('private-account-id', logged)
+
     def test_build_content_does_not_repeat_quota_threshold_warning(self):
         claude_rows = [('Claude1', 100, 'c5', 40, 'c7', None)]
         codex_rows = [('Codex1 team', -1, '', 100, 1234, None)]

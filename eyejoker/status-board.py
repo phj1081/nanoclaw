@@ -17,7 +17,7 @@ Tribunal 소속이던 모델구성(Owner/Reviewer/Arbiter/MoA) 블록은 은퇴�
 
 systemd user timer(ejclaw-status-board.timer)가 5분마다 실행. 침묵=정상.
 """
-import base64, json, os, re, shutil, sqlite3, subprocess, urllib.request, urllib.error, datetime, pathlib, time
+import base64, json, os, re, shutil, sqlite3, subprocess, sys, urllib.request, urllib.error, datetime, pathlib, time
 
 CHANNEL_ID = "1481063226224672930"  # #status
 NANOCLAW_ENV = pathlib.Path.home()/'NanoClaw'/'.env'
@@ -322,7 +322,7 @@ def collect_cliproxy_quota_rows(warn, fetch=None):
                 'header': headers,
             }) or {}
             if response.get('status_code') != 200:
-                raise RuntimeError(f'{provider} quota unavailable')
+                raise RuntimeError(f"upstream HTTP {response.get('status_code')}")
             usage = json.loads(response.get('body') or '{}')
             if provider == 'claude':
                 h5, d7 = _claude_windows(usage)
@@ -359,7 +359,13 @@ def collect_cliproxy_quota_rows(warn, fetch=None):
                         extra_d7[1] if extra_d7 else '',
                         None,
                     ))
-        except Exception:
+        except Exception as exc:
+            print(
+                'cliproxy quota probe failed: '
+                f'provider={provider} account={index} '
+                f'error={type(exc).__name__} detail={exc}',
+                file=sys.stderr,
+            )
             row = (row_name, -1, '', -1, '', None)
             if provider == 'claude':
                 claude_rows.append(row)
